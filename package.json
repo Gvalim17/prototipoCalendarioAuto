@@ -1,0 +1,16 @@
+{
+  "name": "prototipo-calendario-auto",
+  "version": "1.0.0",
+  "description": "Orquestrador de Calendário Automático",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:back\" \"npm run dev:front\"",
+    "dev:back": "cd backend && uvicorn app.main:app --reload",
+    "dev:front": "cd frontend && npm run dev",
+    "install:all": "npm install && cd frontend && npm install && cd ../backend && python -m venv .venv && echo 'Virtualenv criado. Instale os requisitos manualmente ou via script de setup.'",
+    "setup:back": "cd backend && pip install -r requirements.txt"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

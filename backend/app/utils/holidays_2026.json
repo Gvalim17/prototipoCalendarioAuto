@@ -1,0 +1,17 @@
+[
+  {"date": "2026-01-01", "description": "Confraternização Universal", "type": "nacional"},
+  {"date": "2026-01-20", "description": "São Sebastião", "type": "municipal"},
+  {"date": "2026-02-17", "description": "Carnaval", "type": "nacional"},
+  {"date": "2026-04-03", "description": "Paixão de Cristo", "type": "nacional"},
+  {"date": "2026-04-21", "description": "Tiradentes", "type": "nacional"},
+  {"date": "2026-04-23", "description": "São Jorge", "type": "estadual"},
+  {"date": "2026-05-01", "description": "Dia do Trabalho", "type": "nacional"},
+  {"date": "2026-06-04", "description": "Corpus Christi", "type": "nacional"},
+  {"date": "2026-09-07", "description": "Independência do Brasil", "type": "nacional"},
+  {"date": "2026-10-12", "description": "Nossa Senhora Aparecida", "type": "nacional"},
+  {"date": "2026-10-15", "description": "Dia do Mestre", "type": "escolar"},
+  {"date": "2026-11-02", "description": "Finados", "type": "nacional"},
+  {"date": "2026-11-15", "description": "Proclamação da República", "type": "nacional"},
+  {"date": "2026-11-20", "description": "Dia Nacional da Consciência Negra", "type": "nacional"},
+  {"date": "2026-12-25", "description": "Natal", "type": "nacional"}
+]
