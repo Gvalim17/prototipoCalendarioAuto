@@ -146,3 +146,12 @@ class FullScheduleRead(BaseModel):
     classes: List[ScheduledClassRead]
     class Config:
         from_attributes = True
+
+class PreviewExportRequest(BaseModel):
+    mba_name: str
+    module_name: str
+    discipline_name: str
+    format: str
+    workload: int
+    dates: List[date]
+    recurrence: str

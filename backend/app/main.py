@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 import pandas as pd
@@ -13,7 +14,7 @@ from .schemas.base_schemas import (
     ScheduleConfigBase, ScheduleResponse,
     MBAUpdate, ModuleUpdate, DisciplineUpdate,
     FullScheduleCreate, FullScheduleRead, ScheduledClassCreate,
-    CalendarEventRead
+    CalendarEventRead, PreviewExportRequest
 )
 from .models.base import ScheduledClass
 from .services.schedule_generator import ScheduleGeneratorService
@@ -333,6 +334,75 @@ def delete_specific_schedule(config_id: int, db: Session = Depends(get_db)):
     db.delete(db_config)
     db.commit()
     return {"message": "Cronograma removido com sucesso"}
+
+@app.get("/schedules/export/xlsx")
+def export_schedules_xlsx(db: Session = Depends(get_db)):
+    DAYS_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    results = (
+        db.query(ScheduledClass)
+        .join(ScheduleConfig)
+        .join(MBA, ScheduleConfig.mba_id == MBA.id)
+        .join(Module, ScheduleConfig.module_id == Module.id)
+        .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .order_by(ScheduledClass.date)
+        .all()
+    )
+    rows = [
+        {
+            "MBA": sc.config.mba.name,
+            "Módulo": sc.config.module.name,
+            "Disciplina": sc.config.discipline.name,
+            "Formato": sc.config.format.value.capitalize(),
+            "Data": sc.date.strftime('%d/%m/%Y'),
+            "Dia da Semana": DAYS_PT[sc.date.weekday()],
+            "Nº da Aula": sc.order,
+            "Carga Horária (h)": sc.config.workload,
+        }
+        for sc in results
+    ]
+    df = pd.DataFrame(rows if rows else [{"MBA": "", "Módulo": "", "Disciplina": "", "Formato": "", "Data": "", "Dia da Semana": "", "Nº da Aula": "", "Carga Horária (h)": ""}])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Cronograma')
+        ws = writer.sheets['Cronograma']
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 4, 40)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="cronograma_MBA_2026.xlsx"'}
+    )
+
+@app.post("/schedules/export-preview/xlsx")
+def export_preview_xlsx(data: PreviewExportRequest):
+    DAYS_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    rows = [
+        {
+            "MBA": data.mba_name,
+            "Módulo": data.module_name,
+            "Disciplina": data.discipline_name,
+            "Formato": data.format.capitalize(),
+            "Data": d.strftime('%d/%m/%Y'),
+            "Dia da Semana": DAYS_PT[d.weekday()],
+            "Nº da Aula": i + 1,
+            "Carga Horária (h)": data.workload,
+        }
+        for i, d in enumerate(data.dates)
+    ]
+    df = pd.DataFrame(rows)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Preview')
+        ws = writer.sheets['Preview']
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 4, 40)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="cronograma_preview.xlsx"'}
+    )
 
 @app.get("/schedules/", response_model=List[CalendarEventRead])
 def list_all_scheduled_classes(db: Session = Depends(get_db)):

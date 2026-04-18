@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Calendar, BookOpen, CheckCircle2, AlertCircle, Info, ArrowLeft, ChevronRight, Hash, Clock, CalendarDays, List as ListIcon, HelpCircle, GraduationCap, Coffee } from 'lucide-react';
+import { Calendar, BookOpen, CheckCircle2, AlertCircle, Info, ArrowLeft, ChevronRight, Hash, Clock, CalendarDays, List as ListIcon, HelpCircle, GraduationCap, Coffee, Download, Star } from 'lucide-react';
 import axios from 'axios';
 
 const API_BASE = 'http://localhost:8000';
@@ -20,6 +20,13 @@ const ScheduleForm = () => {
     
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [pickerMonth, setPickerMonth] = useState(new Date());
+
+    // RF-09: conflict override state
+    const [conflictOverrides, setConflictOverrides] = useState<Record<string, string>>({});
+    const [activeConflictPicker, setActiveConflictPicker] = useState<string | null>(null);
+    const [conflictPickerMonth, setConflictPickerMonth] = useState(new Date());
+    const [showRecalcModal, setShowRecalcModal] = useState(false);
+    const [pendingOverride, setPendingOverride] = useState<{ conflictDate: string; overrideDate: string } | null>(null);
     
     const [formData, setFormData] = useState({
         mba_id: 0,
@@ -130,6 +137,57 @@ const ScheduleForm = () => {
         }
     };
 
+    // RF-09: apply conflict override
+    const applyOverride = (conflictDate: string, overrideDate: string) => {
+        setActiveConflictPicker(null);
+        setPendingOverride({ conflictDate, overrideDate });
+        setShowRecalcModal(true);
+    };
+
+    const confirmOverrideWithRecalc = () => {
+        setShowRecalcModal(false);
+        setConflictOverrides({});
+        setPendingOverride(null);
+        handleGenerate();
+    };
+
+    const confirmOverrideNoRecalc = () => {
+        if (!pendingOverride) return;
+        const { conflictDate, overrideDate } = pendingOverride;
+        setConflictOverrides(prev => ({ ...prev, [conflictDate]: overrideDate }));
+        const newSkipped = generatedResult.skipped.filter(s => s.date !== conflictDate);
+        const newDates = [...generatedResult.dates, overrideDate].sort();
+        setGeneratedResult({ dates: newDates, skipped: newSkipped });
+        setShowRecalcModal(false);
+        setPendingOverride(null);
+    };
+
+    // RF-12: export preview as xlsx
+    const handleExportPreview = async () => {
+        try {
+            const { mba, mod, disc } = getSelectionLabels();
+            const res = await axios.post(`${API_BASE}/schedules/export-preview/xlsx`, {
+                mba_name: mba || 'MBA',
+                module_name: mod || 'Módulo',
+                discipline_name: disc || 'Disciplina',
+                format: formData.format,
+                workload: formData.workload,
+                dates: generatedResult.dates,
+                recurrence: formData.recurrence,
+            }, { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'cronograma_preview.xlsx');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch {
+            alert('Erro ao exportar cronograma.');
+        }
+    };
+
     const checkHolidayProximity = (dateStr: string) => {
         const classDate = new Date(dateStr + 'T00:00:00');
         const warningDays = 2; 
@@ -176,9 +234,9 @@ const ScheduleForm = () => {
                     
                     <div className="mt-1 flex flex-col gap-1">
                         {isClass && (
-                            <div className="bg-blue-600 shadow-lg shadow-blue-500/20 text-white text-[9px] font-black py-1 px-2 rounded-lg flex items-center justify-between animate-in zoom-in-75">
-                                <span>AULA {classIndex}</span>
-                                <CheckCircle2 size={10} />
+                            <div className={`${formData.recurrence === 'na' ? 'bg-purple-600 shadow-purple-500/20' : 'bg-blue-600 shadow-blue-500/20'} shadow-lg text-white text-[9px] font-black py-1 px-2 rounded-lg flex items-center justify-between animate-in zoom-in-75`}>
+                                <span>{formData.recurrence === 'na' ? 'MASTER CLASS' : `AULA ${classIndex}`}</span>
+                                {formData.recurrence === 'na' ? <Star size={10} /> : <CheckCircle2 size={10} />}
                             </div>
                         )}
                         {holiday && (
@@ -401,21 +459,24 @@ const ScheduleForm = () => {
                                 </FormGroup>
 
                                 <FormGroup label="Recorrência" icon={<ListIcon size={14} className="text-amber-500" />}>
-                                    <select 
+                                    <select
                                         className="select-custom"
                                         value={formData.recurrence}
-                                        onChange={(e) => setFormData({...formData, recurrence: e.target.value})}
+                                        onChange={(e) => {
+                                            const rec = e.target.value;
+                                            setFormData({ ...formData, recurrence: rec, num_classes: rec === 'na' ? 1 : formData.num_classes });
+                                        }}
                                     >
                                         <option value="semanal">Semanal</option>
                                         <option value="quinzenal">Quinzenal</option>
-                                        <option value="na">Evento Único</option>
+                                        <option value="na">Master Class (Evento Único)</option>
                                     </select>
                                 </FormGroup>
 
                                 <FormGroup label="Carga Horária (Total)" icon={<Hash size={14} className="text-blue-500" />}>
                                     <div className="relative group/input">
-                                        <input 
-                                            type="number" className="input-custom" 
+                                        <input
+                                            type="number" className="input-custom"
                                             value={formData.workload}
                                             placeholder="Ex: 24"
                                             onChange={(e) => setFormData({...formData, workload: parseInt(e.target.value)})}
@@ -423,16 +484,18 @@ const ScheduleForm = () => {
                                     </div>
                                 </FormGroup>
 
-                                <FormGroup label="Quantidade de Aulas" icon={<Clock size={14} className="text-amber-400" />}>
-                                    <div className="relative group/input">
-                                        <input 
-                                            type="number" className="input-custom" 
-                                            value={formData.num_classes}
-                                            placeholder="Ex: 4"
-                                            onChange={(e) => setFormData({...formData, num_classes: parseInt(e.target.value)})}
-                                        />
-                                    </div>
-                                </FormGroup>
+                                {formData.recurrence !== 'na' && (
+                                    <FormGroup label="Quantidade de Aulas" icon={<Clock size={14} className="text-amber-400" />}>
+                                        <div className="relative group/input">
+                                            <input
+                                                type="number" className="input-custom"
+                                                value={formData.num_classes}
+                                                placeholder="Ex: 4"
+                                                onChange={(e) => setFormData({...formData, num_classes: parseInt(e.target.value)})}
+                                            />
+                                        </div>
+                                    </FormGroup>
+                                )}
                             </div>
                         </section>
                     </div>
@@ -486,8 +549,14 @@ const ScheduleForm = () => {
                                     <CalendarDays size={14} /> Calendário
                                 </button>
                             </div>
-                            <button 
-                                onClick={() => setStep(1)} 
+                            <button
+                                onClick={handleExportPreview}
+                                className="flex items-center gap-2 bg-emerald-900/40 hover:bg-emerald-800/60 text-emerald-400 border border-emerald-800/50 px-6 py-3 rounded-2xl font-bold transition-all text-xs active:scale-95 uppercase tracking-tighter"
+                            >
+                                <Download size={16} /> .xlsx
+                            </button>
+                            <button
+                                onClick={() => setStep(1)}
                                 className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-6 py-3 rounded-2xl font-bold transition-all text-xs border border-slate-700"
                             >
                                 <ArrowLeft size={16} /> Ajustar
@@ -508,7 +577,9 @@ const ScheduleForm = () => {
                                                     {idx + 1}
                                                 </div>
                                                 <div className="flex-1">
-                                                    <p className="text-[10px] uppercase font-bold text-slate-500 tracking-widest mb-1">Encontro Confirmado</p>
+                                                    <p className="text-[10px] uppercase font-bold text-slate-500 tracking-widest mb-1">
+                                                        {formData.recurrence === 'na' ? 'Master Class' : 'Encontro Confirmado'}
+                                                    </p>
                                                     <h4 className="text-lg font-bold text-white capitalize">
                                                         {new Date(dateStr + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
                                                     </h4>
@@ -574,14 +645,71 @@ const ScheduleForm = () => {
                                 {generatedResult.skipped.length > 0 ? (
                                     <div className="space-y-3">
                                         {generatedResult.skipped.map((s, i) => (
-                                            <div key={i} className="p-4 rounded-xl bg-slate-900/50 border border-amber-500/10 flex gap-3 group hover:border-amber-500/30 transition-all">
-                                                <div className="text-amber-500 pt-1 group-hover:scale-110 transition-transform"><AlertCircle size={14} /></div>
-                                                <div>
-                                                   <p className="text-xs font-black text-amber-500 mb-0.5 uppercase tracking-tighter">
-                                                       {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
-                                                   </p>
-                                                   <p className="text-[10px] text-slate-500 font-medium leading-tight">{s.reason}</p>
+                                            <div key={i} className="p-4 rounded-xl bg-slate-900/50 border border-amber-500/10 group hover:border-amber-500/30 transition-all">
+                                                <div className="flex gap-3 items-start">
+                                                    <div className="text-amber-500 pt-1 group-hover:scale-110 transition-transform flex-shrink-0"><AlertCircle size={14} /></div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-xs font-black text-amber-500 mb-0.5 uppercase tracking-tighter">
+                                                            {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
+                                                        </p>
+                                                        <p className="text-[10px] text-slate-500 font-medium leading-tight">{s.reason}</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => {
+                                                            setActiveConflictPicker(activeConflictPicker === s.date ? null : s.date);
+                                                            setConflictPickerMonth(new Date(s.date + 'T00:00:00'));
+                                                        }}
+                                                        className="text-[9px] font-black text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 px-2 py-1 rounded-lg transition-all uppercase tracking-tight whitespace-nowrap flex-shrink-0"
+                                                    >
+                                                        Repor Data
+                                                    </button>
                                                 </div>
+                                                {activeConflictPicker === s.date && (
+                                                    <div className="mt-3 glass rounded-2xl border border-slate-700 p-3 animate-in fade-in zoom-in-95 duration-200">
+                                                        <div className="flex items-center justify-between mb-2">
+                                                            <span className="text-[9px] font-black text-white uppercase tracking-tighter">
+                                                                {conflictPickerMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+                                                            </span>
+                                                            <div className="flex gap-1">
+                                                                <button type="button" onClick={() => setConflictPickerMonth(new Date(conflictPickerMonth.getFullYear(), conflictPickerMonth.getMonth() - 1, 1))} className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white">
+                                                                    <ArrowLeft size={10} />
+                                                                </button>
+                                                                <button type="button" onClick={() => setConflictPickerMonth(new Date(conflictPickerMonth.getFullYear(), conflictPickerMonth.getMonth() + 1, 1))} className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white">
+                                                                    <ChevronRight size={10} />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <div className="grid grid-cols-7 mb-1">
+                                                            {['D','S','T','Q','Q','S','S'].map((d, di) => (
+                                                                <div key={di} className="text-center text-[7px] font-black text-slate-600 py-0.5">{d}</div>
+                                                            ))}
+                                                        </div>
+                                                        <div className="grid grid-cols-7 gap-0.5">
+                                                            {(() => {
+                                                                const y = conflictPickerMonth.getFullYear();
+                                                                const m = conflictPickerMonth.getMonth();
+                                                                const days = getDaysInMonth(y, m);
+                                                                const first = getFirstDayOfMonth(y, m);
+                                                                const cells = [];
+                                                                for (let ei = 0; ei < first; ei++) cells.push(<div key={`e-${ei}`} className="h-7"></div>);
+                                                                for (let d = 1; d <= days; d++) {
+                                                                    const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                                                                    const isHol = holidays.find(h => h.date === ds);
+                                                                    const isSelected = conflictOverrides[s.date] === ds;
+                                                                    cells.push(
+                                                                        <button key={d} type="button"
+                                                                            onClick={() => !isHol && applyOverride(s.date, ds)}
+                                                                            disabled={!!isHol}
+                                                                            className={`h-7 rounded-lg flex items-center justify-center text-[9px] font-bold transition-all ${isSelected ? 'bg-blue-600 text-white' : isHol ? 'text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                                                                        >{d}</button>
+                                                                    );
+                                                                }
+                                                                return cells;
+                                                            })()}
+                                                        </div>
+                                                        <p className="text-[8px] text-slate-600 mt-2 text-center">Datas em vermelho = feriados (bloqueadas)</p>
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -624,6 +752,40 @@ const ScheduleForm = () => {
                                     Ao clicar em efetivar, as datas serão persistidas e ficarão visíveis para os alunos no App Mobile.
                                 </p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showRecalcModal && pendingOverride && (
+                <div className="fixed inset-0 bg-[#060a14]/95 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-in fade-in duration-300">
+                    <div className="glass max-w-md w-full p-10 rounded-[40px] border border-slate-800 shadow-2xl space-y-8 animate-in zoom-in-95 duration-300">
+                        <div className="text-center space-y-3">
+                            <div className="w-16 h-16 rounded-[24px] bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto mb-4 border border-amber-500/20">
+                                <AlertCircle size={32} />
+                            </div>
+                            <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Reposição Definida</h3>
+                            <p className="text-slate-400 text-sm">
+                                Data escolhida:{' '}
+                                <span className="text-white font-black">
+                                    {new Date(pendingOverride.overrideDate + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+                                </span>
+                            </p>
+                            <p className="text-slate-500 text-xs">Deseja recalcular todo o cronograma com base na configuração original?</p>
+                        </div>
+                        <div className="flex gap-4">
+                            <button
+                                onClick={confirmOverrideNoRecalc}
+                                className="flex-1 py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold transition-all border border-slate-800 text-xs uppercase tracking-tighter"
+                            >
+                                Não, apenas adicionar
+                            </button>
+                            <button
+                                onClick={confirmOverrideWithRecalc}
+                                className="flex-1 py-4 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black transition-all shadow-lg shadow-amber-500/20 text-xs uppercase tracking-tighter"
+                            >
+                                Sim, Recalcular
+                            </button>
                         </div>
                     </div>
                 </div>
