@@ -18,8 +18,9 @@ def test_generate_weekly_schedule_no_blocks():
         day_of_week=0 # Segunda
     )
 
-    dates = ScheduleGeneratorService.generate_schedule(db, config)
-    
+    result = ScheduleGeneratorService.generate_schedule(db, config)
+    dates = result["dates"]
+
     assert len(dates) == 4
     assert dates[0] == date(2026, 10, 5)
     assert dates[1] == date(2026, 10, 12)
@@ -39,8 +40,9 @@ def test_generate_schedule_skipping_holiday():
         day_of_week=0
     )
 
-    dates = ScheduleGeneratorService.generate_schedule(db, config)
-    
+    result = ScheduleGeneratorService.generate_schedule(db, config)
+    dates = result["dates"]
+
     assert len(dates) == 2
     assert dates[0] == date(2026, 10, 5)
     # A aula 2 deveria ser dia 12, mas como é feriado, pula para dia 19
@@ -59,8 +61,9 @@ def test_generate_schedule_skipping_recess():
         day_of_week=0
     )
 
-    dates = ScheduleGeneratorService.generate_schedule(db, config)
-    
+    result = ScheduleGeneratorService.generate_schedule(db, config)
+    dates = result["dates"]
+
     assert len(dates) == 2
     assert dates[0] == date(2026, 10, 5)
     # Dia 12 está dentro do recesso (10-20), pula para dia 19? Não, dia 19 também está no recesso! Pula para dia 26.
