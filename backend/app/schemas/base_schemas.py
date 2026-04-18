@@ -105,6 +105,20 @@ class ScheduleConfigBase(BaseModel):
 class SkippedDate(BaseModel):
     date: date
     reason: str
+    suggested_date: Optional[date] = None
+
+class ConflictResolution(BaseModel):
+    original_date: date
+    action: str  # "auto" | "manual"
+    resolved_date: date
+
+class ResolveConflictsRequest(BaseModel):
+    config: ScheduleConfigBase
+    resolutions: List[ConflictResolution]
+
+class ResolvedScheduleResponse(BaseModel):
+    dates: List[date]
+    config: ScheduleConfigBase
 
 class ScheduleResponse(BaseModel):
     dates: List[date]

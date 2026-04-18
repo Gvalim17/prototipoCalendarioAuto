@@ -6,15 +6,16 @@ import pandas as pd
 import io
 from .models.base import Base, MBA, Module, Discipline, Holiday, Recess, ScheduleConfig
 from .schemas.base_schemas import (
-    MBACreate, MBARead, 
+    MBACreate, MBARead,
     ModuleCreate, ModuleRead,
     DisciplineCreate, DisciplineRead,
-    HolidayCreate, HolidayRead, 
+    HolidayCreate, HolidayRead,
     RecessCreate, RecessRead,
     ScheduleConfigBase, ScheduleResponse,
     MBAUpdate, ModuleUpdate, DisciplineUpdate,
     FullScheduleCreate, FullScheduleRead, ScheduledClassCreate,
-    CalendarEventRead, PreviewExportRequest
+    CalendarEventRead, PreviewExportRequest,
+    ResolveConflictsRequest, ResolvedScheduleResponse
 )
 from .models.base import ScheduledClass
 from .services.schedule_generator import ScheduleGeneratorService
