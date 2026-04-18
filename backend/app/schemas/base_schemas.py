@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from datetime import date
-from typing import List, Optional
+from typing import List, Literal, Optional
 from ..models.base import DeliveryFormat, RecurrenceType
 
 # --- MBA ---
