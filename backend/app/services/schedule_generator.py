@@ -24,6 +24,71 @@ class ScheduleGeneratorService:
         return None
 
     @classmethod
+    def resolve_conflicts(cls, db: Session, config: ScheduleConfig, resolutions: List[dict]) -> dict:
+        """
+        Recebe as configurações originais e uma lista de resoluções.
+        Suporta 'manual' (apenas substitui) e 'recalculate' (gera o resto a partir dali).
+        """
+        holidays = {h.date: h.description for h in db.query(Holiday).all()}
+        recesses = [(r.start_date, r.end_date, r.description) for r in db.query(Recess).all()]
+        
+        # 1. Obter o resultado base
+        base_result = cls.generate_schedule(db, config)
+        current_dates = base_result["dates"]
+        
+        # Se não houver resoluções, retorna o base
+        if not resolutions:
+            return base_result
+
+        # Ordenar resoluções pela data original
+        resolutions.sort(key=lambda x: x["original_date"])
+        
+        # Para este protótipo, vamos considerar a primeira resolução que solicita recálculo
+        # como o ponto de re-geração.
+        recalc_resolution = next((r for r in resolutions if r.get("action") == "recalculate"), None)
+        
+        if recalc_resolution:
+            # Lógica de Recálculo em Cascata:
+            # 1. Manter as datas antes do conflito
+            pivot_date = recalc_resolution["original_date"]
+            fixed_dates = [d for d in current_dates if d < pivot_date]
+            
+            # 2. A nova data de reposição é a primeira do novo bloco
+            new_start = recalc_resolution["resolved_date"]
+            
+            # 3. Gerar o restante (quanta aulas faltam?)
+            remaining_count = config.num_classes - len(fixed_dates)
+            
+            new_config = ScheduleConfig(
+                start_date=new_start,
+                num_classes=remaining_count,
+                recurrence=config.recurrence,
+                day_of_week=new_start.weekday() # Ajusta para o dia da semana da nova data
+            )
+            
+            # Geramos o novo bloco a partir da data de reposição
+            new_block = cls.generate_schedule(db, new_config)
+            
+            return {
+                "dates": fixed_dates + new_block["dates"],
+                "skipped": new_block["skipped"] # Novos conflitos que podem surgir no novo bloco
+            }
+        
+        # Lógica Manual (apenas substitui)
+        res_map = {r["original_date"]: r["resolved_date"] for r in resolutions}
+        final_dates = []
+        for d in current_dates:
+            final_dates.append(res_map.get(d, d))
+        
+        # Adicionar datas que eram 'skipped' mas agora foram repostas
+        for orig, reso in res_map.items():
+            if reso not in final_dates:
+                final_dates.append(reso)
+                
+        final_dates.sort()
+        return {"dates": final_dates, "skipped": [s for s in base_result["skipped"] if s["date"] not in res_map]}
+
+    @classmethod
     def generate_schedule(cls, db: Session, config: ScheduleConfig) -> dict:
         holidays = {h.date: h.description for h in db.query(Holiday).all()}
         recesses = [(r.start_date, r.end_date, r.description) for r in db.query(Recess).all()]
