@@ -28,6 +28,9 @@ const ScheduleForm = () => {
     const [showRecalcModal, setShowRecalcModal] = useState(false);
     const [pendingOverride, setPendingOverride] = useState<{ conflictDate: string; overrideDate: string } | null>(null);
     
+    // RF-07/RF-08: batch conflict resolution state
+    const [resolutions, setResolutions] = useState<Record<string, { action: 'auto' | 'manual'; resolved_date: string }>>({});
+    
     const [formData, setFormData] = useState({
         mba_id: 0,
         module_id: 0,
@@ -106,9 +109,50 @@ const ScheduleForm = () => {
                 setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
             }
             
-            setStep(2);
+            if (res.data.skipped.length > 0) {
+                const initial: Record<string, { action: 'auto' | 'manual'; resolved_date: string }> = {};
+                for (const s of res.data.skipped) {
+                    if (s.suggested_date) {
+                        initial[s.date] = { action: 'auto', resolved_date: s.suggested_date };
+                    }
+                }
+                setResolutions(initial);
+                setStep(2);
+            } else {
+                setStep(3);
+            }
         } catch (err: any) {
             alert("Erro ao gerar: " + (err.response?.data?.detail || err.message));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleApplyResolutions = async () => {
+        const startDateObj = new Date(formData.start_date + 'T00:00:00');
+        const jsDay = startDateObj.getDay();
+        const pyDay = jsDay === 0 ? 6 : jsDay - 1;
+        setLoading(true);
+        try {
+            const resolutionList = generatedResult.skipped.map((s: any) => {
+                const r = resolutions[s.date];
+                return {
+                    original_date: s.date,
+                    action: r?.action ?? 'auto',
+                    resolved_date: r?.resolved_date ?? s.suggested_date ?? s.date,
+                };
+            });
+            const res = await axios.post(`${API_BASE}/schedules/resolve-conflicts/`, {
+                config: { ...formData, day_of_week: pyDay },
+                resolutions: resolutionList,
+            });
+            setGeneratedResult({ dates: res.data.dates, skipped: [] });
+            if (res.data.dates.length > 0) {
+                setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
+            }
+            setStep(3);
+        } catch (err: any) {
+            alert('Erro ao aplicar resoluções: ' + (err.response?.data?.detail || err.message));
         } finally {
             setLoading(false);
         }
@@ -138,29 +182,40 @@ const ScheduleForm = () => {
     };
 
     // RF-09: apply conflict override
+    // RF-09: apply conflict override
     const applyOverride = (conflictDate: string, overrideDate: string) => {
         setActiveConflictPicker(null);
         setPendingOverride({ conflictDate, overrideDate });
         setShowRecalcModal(true);
     };
 
-    const confirmOverrideWithRecalc = () => {
-        setShowRecalcModal(false);
-        setConflictOverrides({});
-        setPendingOverride(null);
-        handleGenerate();
+    const resolveConflict = async (action: 'manual' | 'recalculate') => {
+        if (!pendingOverride) return;
+        setLoading(true);
+        try {
+            const res = await axios.post(`${API_BASE}/resolve-conflicts/`, {
+                config: {
+                    ...formData,
+                    day_of_week: new Date(formData.start_date + 'T00:00:00').getDay() === 0 ? 6 : new Date(formData.start_date + 'T00:00:00').getDay() - 1
+                },
+                resolutions: [{
+                    original_date: pendingOverride.conflictDate,
+                    resolved_date: pendingOverride.overrideDate,
+                    action: action
+                }]
+            });
+            setGeneratedResult({ dates: res.data.dates, skipped: res.data.skipped || [] });
+            setShowRecalcModal(false);
+            setPendingOverride(null);
+        } catch (err: any) {
+            alert("Erro ao resolver conflito: " + (err.response?.data?.detail || err.message));
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const confirmOverrideNoRecalc = () => {
-        if (!pendingOverride) return;
-        const { conflictDate, overrideDate } = pendingOverride;
-        setConflictOverrides(prev => ({ ...prev, [conflictDate]: overrideDate }));
-        const newSkipped = generatedResult.skipped.filter(s => s.date !== conflictDate);
-        const newDates = [...generatedResult.dates, overrideDate].sort();
-        setGeneratedResult({ dates: newDates, skipped: newSkipped });
-        setShowRecalcModal(false);
-        setPendingOverride(null);
-    };
+    const confirmOverrideWithRecalc = () => resolveConflict('recalculate');
+    const confirmOverrideNoRecalc = () => resolveConflict('manual');
 
     // RF-12: export preview as xlsx
     const handleExportPreview = async () => {
@@ -527,7 +582,75 @@ const ScheduleForm = () => {
                 </div>
             )}
 
-            {step === 2 && (
+                        {step === 2 && (
+                <div className="space-y-6 animate-in fade-in duration-500">
+                    <div className="flex items-center gap-4">
+                        <button onClick={() => setStep(1)} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all">
+                            <ArrowLeft size={20} />
+                        </button>
+                        <div>
+                            <h3 className="text-2xl font-bold text-white">Resolução de Conflitos</h3>
+                            <p className="text-slate-400 text-sm mt-1">Escolha como tratar cada data bloqueada antes de confirmar o cronograma.</p>
+                        </div>
+                    </div>
+                    <div className="space-y-4">
+                        {generatedResult.skipped.map((s: any) => {
+                            const r = resolutions[s.date];
+                            return (
+                                <div key={s.date} className="glass p-5 rounded-2xl border border-amber-500/20 space-y-4">
+                                    <div>
+                                        <p className="text-white font-semibold">
+                                            {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                                        </p>
+                                        <p className="text-amber-400 text-sm flex items-center gap-1 mt-1">
+                                            <AlertCircle size={14} />
+                                            {s.reason}
+                                        </p>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button
+                                            onClick={() => setResolutions(prev => ({ ...prev, [s.date]: { action: 'auto', resolved_date: s.suggested_date } }))}
+                                            className={`p-3 rounded-xl border text-sm font-semibold transition-all ${r?.action === 'auto' ? 'bg-green-600/20 border-green-500/50 text-green-400' : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'}`}
+                                        >
+                                            <CheckCircle2 size={16} className="mx-auto mb-1" />
+                                            Ajuste Automático
+                                            {s.suggested_date && (
+                                                <p className="text-xs mt-1 font-normal opacity-80">
+                                                    → {new Date(s.suggested_date + 'T00:00:00').toLocaleDateString('pt-BR')}
+                                                </p>
+                                            )}
+                                        </button>
+                                        <div className={`p-3 rounded-xl border text-sm font-semibold transition-all ${r?.action === 'manual' ? 'bg-blue-600/20 border-blue-500/50 text-blue-400' : 'bg-slate-800/50 border-slate-700 text-slate-400'}`}>
+                                            <CalendarDays size={16} className="mx-auto mb-1" />
+                                            Ajuste Manual
+                                            <input
+                                                type="date"
+                                                className="mt-2 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                value={r?.action === 'manual' ? r.resolved_date : ''}
+                                                onChange={(e) => {
+                                                    if (e.target.value) {
+                                                        setResolutions(prev => ({ ...prev, [s.date]: { action: 'manual', resolved_date: e.target.value } }));
+                                                    }
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <button
+                        onClick={handleApplyResolutions}
+                        disabled={loading || generatedResult.skipped.some((s: any) => !resolutions[s.date]?.resolved_date)}
+                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-2"
+                    >
+                        {loading ? 'Processando...' : 'Aplicar Resoluções e Ver Cronograma'}
+                        <ChevronRight size={20} />
+                    </button>
+                </div>
+            )}
+
+            {step === 3 && (
                 <div className="space-y-8 animate-in fade-in duration-700">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
@@ -653,6 +776,21 @@ const ScheduleForm = () => {
                                                             {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
                                                         </p>
                                                         <p className="text-[10px] text-slate-500 font-medium leading-tight">{s.reason}</p>
+                                                        
+                                                        {s.suggested_date && (
+                                                            <div className="mt-2 p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/10 flex items-center justify-between animate-in fade-in slide-in-from-left-2 duration-300">
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                                                                    <span className="text-[9px] font-bold text-emerald-500/80 uppercase tracking-tighter">Sugestão: {new Date(s.suggested_date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
+                                                                </div>
+                                                                <button 
+                                                                    onClick={() => applyOverride(s.date, s.suggested_date)}
+                                                                    className="text-[8px] font-black bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white px-2 py-1 rounded-md transition-all uppercase border border-emerald-500/20"
+                                                                >
+                                                                    Aceitar
+                                                                </button>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     <button
                                                         onClick={() => {
@@ -661,7 +799,7 @@ const ScheduleForm = () => {
                                                         }}
                                                         className="text-[9px] font-black text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 px-2 py-1 rounded-lg transition-all uppercase tracking-tight whitespace-nowrap flex-shrink-0"
                                                     >
-                                                        Repor Data
+                                                        Repor Manual
                                                     </button>
                                                 </div>
                                                 {activeConflictPicker === s.date && (
