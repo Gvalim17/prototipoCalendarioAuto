@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:back\" \"npm run dev:front\"",
-    "dev:back": "cd backend && uvicorn app.main:app --reload",
+    "dev:back": "cd backend && .venv/bin/uvicorn app.main:app --reload",
     "dev:front": "cd frontend && npm run dev",
     "install:all": "npm install && cd frontend && npm install && cd ../backend && python -m venv .venv && echo 'Virtualenv criado. Instale os requisitos manualmente ou via script de setup.'",
     "setup:back": "cd backend && pip install -r requirements.txt"
