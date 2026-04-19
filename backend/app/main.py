@@ -155,6 +155,30 @@ def delete_discipline(discipline_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Disciplina excluída com sucesso"}
 
+
+@app.get("/disciplines/search")
+def search_disciplines(q: str = "", db: Session = Depends(get_db)):
+    if len(q) < 2:
+        return []
+    results = (
+        db.query(Discipline, Module, MBA)
+        .join(Module, Discipline.module_id == Module.id)
+        .join(MBA, Module.mba_id == MBA.id)
+        .filter(Discipline.name.ilike(f"%{q}%"))
+        .limit(10)
+        .all()
+    )
+    return [
+        {
+            "id": disc.id,
+            "name": disc.name,
+            "code": disc.code,
+            "module_name": mod.name,
+            "mba_name": mba.name,
+        }
+        for disc, mod, mba in results
+    ]
+
 # --- Holiday ---
 @app.post("/holidays/", response_model=HolidayRead)
 def create_holiday(holiday: HolidayCreate, db: Session = Depends(get_db)):
@@ -292,6 +316,20 @@ def generate_schedule(config: ScheduleConfigBase, db: Session = Depends(get_db))
             dates=result["dates"],
             skipped=result["skipped"],
             config=config
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/schedules/resolve-conflicts/", response_model=ResolvedScheduleResponse)
+def resolve_schedule_conflicts(request: ResolveConflictsRequest, db: Session = Depends(get_db)):
+    try:
+        cfg_model = ScheduleConfig(**request.config.model_dump())
+        resolutions = [r.model_dump() for r in request.resolutions]
+        result = ScheduleGeneratorService.resolve_conflicts(db, cfg_model, resolutions)
+        
+        return ResolvedScheduleResponse(
+            dates=result["dates"],
+            config=request.config
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
