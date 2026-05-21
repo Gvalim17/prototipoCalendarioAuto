@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List
 import pandas as pd
 import io
@@ -193,7 +194,11 @@ def search_disciplines(q: str = "", db: Session = Depends(get_db)):
 def create_holiday(holiday: HolidayCreate, db: Session = Depends(get_db)):
     db_holiday = Holiday(**holiday.model_dump())
     db.add(db_holiday)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Já existe um feriado cadastrado na data {holiday.date}.")
     db.refresh(db_holiday)
     return db_holiday
 
@@ -253,12 +258,16 @@ async def upload_holidays(file: UploadFile = File(...), db: Session = Depends(ge
         count = 0
         for _, row in df.iterrows():
             try:
-                # Converter data
+                # Converter data — dayfirst=False para preservar formato ISO (YYYY-MM-DD)
+                # e formato BR (DD/MM/YYYY) apenas quando o primeiro componente for > 12
                 raw_date = row['date']
                 if isinstance(raw_date, str):
-                    h_date = pd.to_datetime(raw_date, dayfirst=True).date()
+                    raw_str = raw_date.strip()
+                    # Detectar se é formato ISO (YYYY-MM-DD ou YYYY/MM/DD)
+                    use_dayfirst = not (len(raw_str) >= 4 and raw_str[:4].isdigit() and int(raw_str[:4]) > 31)
+                    h_date = pd.to_datetime(raw_str, dayfirst=use_dayfirst).date()
                 else:
-                    h_date = raw_date.date() if hasattr(raw_date, 'date') else pd.to_datetime(raw_date, dayfirst=True).date()
+                    h_date = raw_date.date() if hasattr(raw_date, 'date') else pd.to_datetime(raw_date).date()
                 
                 # Verificar se já existe
                 exists = db.query(Holiday).filter(Holiday.date == h_date).first()
@@ -288,6 +297,17 @@ async def upload_holidays(file: UploadFile = File(...), db: Session = Depends(ge
 # --- Recess ---
 @app.post("/recesses/", response_model=RecessRead)
 def create_recess(recess: RecessCreate, db: Session = Depends(get_db)):
+    if recess.start_date >= recess.end_date:
+        raise HTTPException(status_code=422, detail="A data de início deve ser anterior à data de fim.")
+    overlapping = db.query(Recess).filter(
+        Recess.start_date <= recess.end_date,
+        Recess.end_date >= recess.start_date,
+    ).first()
+    if overlapping:
+        raise HTTPException(
+            status_code=409,
+            detail=f"O período informado se sobrepõe com o recesso '{overlapping.description}' ({overlapping.start_date} – {overlapping.end_date})."
+        )
     db_recess = Recess(**recess.model_dump())
     db.add(db_recess)
     db.commit()
