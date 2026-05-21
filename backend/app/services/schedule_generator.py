@@ -29,9 +29,6 @@ class ScheduleGeneratorService:
         Recebe as configurações originais e uma lista de resoluções.
         Suporta 'manual' (apenas substitui) e 'recalculate' (gera o resto a partir dali).
         """
-        holidays = {h.date: h.description for h in db.query(Holiday).all()}
-        recesses = [(r.start_date, r.end_date, r.description) for r in db.query(Recess).all()]
-        
         # 1. Obter o resultado base
         base_result = cls.generate_schedule(db, config)
         current_dates = base_result["dates"]
@@ -74,19 +71,34 @@ class ScheduleGeneratorService:
                 "skipped": new_block["skipped"] # Novos conflitos que podem surgir no novo bloco
             }
         
-        # Lógica Manual (apenas substitui)
-        res_map = {r["original_date"]: r["resolved_date"] for r in resolutions}
-        final_dates = []
-        for d in current_dates:
-            final_dates.append(res_map.get(d, d))
-        
-        # Adicionar datas que eram 'skipped' mas agora foram repostas
-        for orig, reso in res_map.items():
-            if reso not in final_dates:
-                final_dates.append(reso)
-                
-        final_dates.sort()
-        return {"dates": final_dates, "skipped": [s for s in base_result["skipped"] if s["date"] not in res_map]}
+        # Lógica: substituir suggested_date (já presente em current_dates) pela resolved_date escolhida
+        # Para action='auto': resolved_date == suggested_date, nothing changes
+        # Para action='manual': resolved_date != suggested_date, replace in-place
+        skipped_map = {s["date"]: s["suggested_date"] for s in base_result["skipped"]}
+        final_dates = list(current_dates)
+
+        for r in resolutions:
+            original = r["original_date"]
+            resolved = r["resolved_date"]
+            suggested = skipped_map.get(original)
+
+            if suggested is not None and suggested in final_dates:
+                # Replace the auto-suggested placeholder with the user's chosen date
+                idx = final_dates.index(suggested)
+                final_dates[idx] = resolved
+            elif resolved not in final_dates:
+                # No suggestion existed (find_next_valid returned None), add the chosen date
+                final_dates.append(resolved)
+
+        # Sort and deduplicate
+        seen: set = set()
+        deduped = []
+        for d in sorted(final_dates):
+            if d not in seen:
+                seen.add(d)
+                deduped.append(d)
+
+        return {"dates": deduped, "skipped": []}
 
     @classmethod
     def generate_schedule(cls, db: Session, config: ScheduleConfig) -> dict:
