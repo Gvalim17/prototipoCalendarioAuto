@@ -22,7 +22,7 @@ const ScheduleForm = () => {
     const [pickerMonth, setPickerMonth] = useState(new Date());
 
     // RF-09: conflict override state
-    const [conflictOverrides, setConflictOverrides] = useState<Record<string, string>>({});
+    const [conflictOverrides, _setConflictOverrides] = useState<Record<string, string>>({});
     const [activeConflictPicker, setActiveConflictPicker] = useState<string | null>(null);
     const [conflictPickerMonth, setConflictPickerMonth] = useState(new Date());
     const [showRecalcModal, setShowRecalcModal] = useState(false);
