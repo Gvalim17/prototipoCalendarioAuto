@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Calendar, BookOpen, CheckCircle2, AlertCircle, Info, ArrowLeft, ChevronRight, Hash, Clock, CalendarDays, List as ListIcon, HelpCircle, GraduationCap, Coffee, Download, Star } from 'lucide-react';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const ScheduleForm = () => {
     const [loading, setLoading] = useState(false);

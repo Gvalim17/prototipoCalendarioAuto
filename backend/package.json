@@ -1,5 +1,5 @@
 {
-  "dependencies": {
-    "uvicorn": "^0.0.1-security"
+  "scripts": {
+    "test": ".venv/bin/pytest tests/ -v"
   }
 }

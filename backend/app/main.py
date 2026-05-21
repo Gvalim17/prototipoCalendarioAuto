@@ -13,7 +13,7 @@ from .schemas.base_schemas import (
     RecessCreate, RecessRead,
     ScheduleConfigBase, ScheduleResponse,
     MBAUpdate, ModuleUpdate, DisciplineUpdate,
-    FullScheduleCreate, FullScheduleRead, ScheduledClassCreate,
+    FullScheduleCreate, FullScheduleRead,
     CalendarEventRead, PreviewExportRequest,
     ResolveConflictsRequest, ResolvedScheduleResponse
 )
@@ -22,20 +22,29 @@ from .services.schedule_generator import ScheduleGeneratorService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, joinedload
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
 
-# Configuração Database
-SQLALCHEMY_DATABASE_URL = "sqlite:///./sql_app.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+load_dotenv()
+
+# Database
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
+# Heroku/some providers use postgres:// — SQLAlchemy 2.x requires postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Cria as tabelas
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MBA 2026 · Sistema de Calendário Inteligente")
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

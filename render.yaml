@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: calendario-auto-backend
+    env: python
+    plan: free
+    # Defina "Root Directory" como "backend" nas configurações do Render
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false  # Preenchido manualmente no painel do Render com a URL do Neon
+      - key: ALLOWED_ORIGINS
+        sync: false  # Ex: https://seu-projeto.vercel.app
+      - key: PYTHON_VERSION
+        value: "3.11.0"
