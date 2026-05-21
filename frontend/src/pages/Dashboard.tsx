@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { GraduationCap, BookOpen, Coffee, Calendar as CalendarIcon, ChevronRight, AlertCircle, Clock, Info } from 'lucide-react';
+import { GraduationCap, BookOpen, Coffee, Calendar as CalendarIcon, ChevronRight, AlertCircle, Clock, Download } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
@@ -104,7 +104,7 @@ const Dashboard = () => {
         </div>
 
         <div className="flex gap-3">
-           <button 
+           <button
              onClick={async () => {
                if(confirm("Tem certeza que deseja apagar TODOS os cronogramas? Esta ação não pode ser desfeita.")) {
                  await axios.delete(`${API_BASE}/schedules/all`);
@@ -115,6 +115,27 @@ const Dashboard = () => {
            >
             <AlertCircle size={18} />
             Reset Total
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                const res = await axios.get(`${API_BASE}/schedules/export/xlsx`, { responseType: 'blob' });
+                const url = window.URL.createObjectURL(new Blob([res.data]));
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', 'cronograma_MBA_2026.xlsx');
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                window.URL.revokeObjectURL(url);
+              } catch {
+                alert('Erro ao exportar cronograma.');
+              }
+            }}
+            className="flex items-center gap-2 bg-emerald-900/40 hover:bg-emerald-800/60 text-emerald-400 border border-emerald-800/50 px-6 py-3 rounded-2xl font-black text-xs transition-all active:scale-95 uppercase tracking-tighter"
+          >
+            <Download size={18} />
+            Exportar .xlsx
           </button>
            <Link to="/generate" className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-black text-xs transition-all shadow-xl shadow-blue-500/20 active:scale-95 uppercase tracking-tighter">
             <CalendarIcon size={18} />
