@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Plus, GraduationCap, ChevronRight, Trash2, ArrowLeft, BookOpen, Settings, X, CheckCircle2 } from 'lucide-react';
-import { Routes, Route, useNavigate, useParams, Link } from 'react-router-dom';
+import { Routes, Route, useNavigate, useParams } from 'react-router-dom';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -460,10 +460,10 @@ const MBADetails = () => {
 
                 {mod.disciplines?.map((disc: any) => (
                   <div key={disc.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-900/50 border border-slate-800 group">
-                    {editingDiscipline?.id === disc.id ? (
+                    {editingDiscipline && editingDiscipline.id === disc.id ? (
                       <div className="flex-1 flex gap-2">
-                        <input className="flex-1 bg-slate-800 border border-slate-700 p-1 text-sm text-white" value={editingDiscipline.name} onChange={e => setEditingDiscipline({...editingDiscipline, name: e.target.value})} />
-                        <input className="w-20 bg-slate-800 border border-slate-700 p-1 text-sm text-white font-mono" value={editingDiscipline.code} onChange={e => setEditingDiscipline({...editingDiscipline, code: e.target.value})} />
+                        <input className="flex-1 bg-slate-800 border border-slate-700 p-1 text-sm text-white" value={editingDiscipline.name} onChange={e => setEditingDiscipline({...editingDiscipline!, name: e.target.value})} />
+                        <input className="w-20 bg-slate-800 border border-slate-700 p-1 text-sm text-white font-mono" value={editingDiscipline.code} onChange={e => setEditingDiscipline({...editingDiscipline!, code: e.target.value})} />
                         <button onClick={() => updateDiscipline(disc.id, editingDiscipline.name, editingDiscipline.code, mod.id)} className="bg-blue-600 px-2 rounded text-white text-xs">OK</button>
                         <button onClick={() => setEditingDiscipline(null)} className="bg-slate-700 px-2 rounded text-white text-xs">X</button>
                       </div>
