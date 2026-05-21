@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Plus, GraduationCap, ChevronRight, Trash2, ArrowLeft, BookOpen, Settings, X, CheckCircle2 } from 'lucide-react';
 import { Routes, Route, useNavigate, useParams, Link } from 'react-router-dom';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 interface MBA {
   id: number;
