@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Plus, GraduationCap, ChevronRight, Trash2, ArrowLeft, BookOpen, Settings, X } from 'lucide-react';
+import { Plus, GraduationCap, ChevronRight, Trash2, ArrowLeft, BookOpen, Settings, X, CheckCircle2 } from 'lucide-react';
 import { Routes, Route, useNavigate, useParams, Link } from 'react-router-dom';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 interface MBA {
   id: number;
@@ -217,6 +217,9 @@ const MBADetails = () => {
   const [newModuleName, setNewModuleName] = useState('');
   const [selectedModuleId, setSelectedModuleId] = useState<number | null>(null);
   const [newDiscipline, setNewDiscipline] = useState({ name: '', code: '' });
+  const [discSearchResults, setDiscSearchResults] = useState<any[]>([]);
+  const [discSearchTimer, setDiscSearchTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedExistingDisc, setSelectedExistingDisc] = useState<number | null>(null);
 
   const [editingModule, setEditingModule] = useState<Module | null>(null);
   const [editingDiscipline, setEditingDiscipline] = useState<Discipline | null>(null);
@@ -276,11 +279,35 @@ const MBADetails = () => {
     }
   };
 
+  const searchDisciplines = (query: string) => {
+    setNewDiscipline(prev => ({ ...prev, name: query }));
+    setSelectedExistingDisc(null);
+    if (discSearchTimer) clearTimeout(discSearchTimer);
+    if (query.length < 2) { setDiscSearchResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await axios.get(`${API_URL}/disciplines/search?q=${encodeURIComponent(query)}`);
+        setDiscSearchResults(res.data);
+      } catch { setDiscSearchResults([]); }
+    }, 300);
+    setDiscSearchTimer(t);
+  };
+
+  const selectExistingDiscipline = (disc: any) => {
+    setNewDiscipline({ name: disc.name, code: disc.code });
+    setSelectedExistingDisc(disc.id);
+    setDiscSearchResults([]);
+  };
+
   const addDiscipline = async (moduleId: number) => {
     if (!newDiscipline.name || !newDiscipline.code) return;
     try {
-      await axios.post(`${API_URL}/disciplines/`, { ...newDiscipline, module_id: moduleId });
+      const payload: any = { ...newDiscipline, module_id: moduleId };
+      if (selectedExistingDisc) payload.existing_discipline_id = selectedExistingDisc;
+      await axios.post(`${API_URL}/disciplines/`, payload);
       setNewDiscipline({ name: '', code: '' });
+      setSelectedExistingDisc(null);
+      setDiscSearchResults([]);
       setSelectedModuleId(null);
       fetchDetails();
     } catch (error) {
@@ -392,12 +419,31 @@ const MBADetails = () => {
                 {selectedModuleId === mod.id && (
                   <div className="bg-blue-600/5 border border-blue-500/20 p-4 rounded-2xl mb-4 space-y-4">
                     <div className="grid grid-cols-2 gap-3">
-                      <input 
-                        type="text" placeholder="Nome"
-                        className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm"
-                        value={newDiscipline.name}
-                        onChange={(e) => setNewDiscipline({...newDiscipline, name: e.target.value})}
-                      />
+                      <div className="relative">
+                        <input 
+                          type="text" placeholder="Nome (buscar ou criar)"
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm pr-20"
+                          value={newDiscipline.name}
+                          onChange={(e) => searchDisciplines(e.target.value)}
+                          autoComplete="off"
+                        />
+                        {selectedExistingDisc && (
+                          <span className="absolute right-2 top-2 text-xs text-green-400 flex items-center gap-1">
+                            <CheckCircle2 size={11} /> Reutilizando
+                          </span>
+                        )}
+                        {discSearchResults.length > 0 && (
+                          <div className="absolute top-full left-0 right-0 z-50 bg-slate-900 border border-slate-700 rounded-xl mt-1 overflow-hidden shadow-xl max-h-40 overflow-y-auto">
+                            {discSearchResults.map((d: any) => (
+                              <button key={d.id} type="button" onClick={() => selectExistingDiscipline(d)}
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-800 transition-colors">
+                                <span className="text-white font-medium">{d.name}</span>
+                                <span className="text-slate-500 text-xs ml-2">{d.mba_name} › {d.module_name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <input 
                         type="text" placeholder="Código"
                         className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm"

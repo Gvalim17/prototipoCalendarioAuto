@@ -1,39 +1,51 @@
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List
 import pandas as pd
 import io
 from .models.base import Base, MBA, Module, Discipline, Holiday, Recess, ScheduleConfig
 from .schemas.base_schemas import (
-    MBACreate, MBARead, 
+    MBACreate, MBARead,
     ModuleCreate, ModuleRead,
     DisciplineCreate, DisciplineRead,
-    HolidayCreate, HolidayRead, 
+    HolidayCreate, HolidayRead,
     RecessCreate, RecessRead,
     ScheduleConfigBase, ScheduleResponse,
     MBAUpdate, ModuleUpdate, DisciplineUpdate,
-    FullScheduleCreate, FullScheduleRead, ScheduledClassCreate,
-    CalendarEventRead
+    FullScheduleCreate, FullScheduleRead,
+    CalendarEventRead, PreviewExportRequest,
+    ResolveConflictsRequest, ResolvedScheduleResponse
 )
 from .models.base import ScheduledClass
 from .services.schedule_generator import ScheduleGeneratorService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, joinedload
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
 
-# Configuração Database
-SQLALCHEMY_DATABASE_URL = "sqlite:///./sql_app.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+load_dotenv()
+
+# Database
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
+# Heroku/some providers use postgres:// — SQLAlchemy 2.x requires postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Cria as tabelas
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MBA 2026 · Sistema de Calendário Inteligente")
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,12 +165,40 @@ def delete_discipline(discipline_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Disciplina excluída com sucesso"}
 
+
+@app.get("/disciplines/search")
+def search_disciplines(q: str = "", db: Session = Depends(get_db)):
+    if len(q) < 2:
+        return []
+    results = (
+        db.query(Discipline, Module, MBA)
+        .join(Module, Discipline.module_id == Module.id)
+        .join(MBA, Module.mba_id == MBA.id)
+        .filter(Discipline.name.ilike(f"%{q}%"))
+        .limit(10)
+        .all()
+    )
+    return [
+        {
+            "id": disc.id,
+            "name": disc.name,
+            "code": disc.code,
+            "module_name": mod.name,
+            "mba_name": mba.name,
+        }
+        for disc, mod, mba in results
+    ]
+
 # --- Holiday ---
 @app.post("/holidays/", response_model=HolidayRead)
 def create_holiday(holiday: HolidayCreate, db: Session = Depends(get_db)):
     db_holiday = Holiday(**holiday.model_dump())
     db.add(db_holiday)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Já existe um feriado cadastrado na data {holiday.date}.")
     db.refresh(db_holiday)
     return db_holiday
 
@@ -218,12 +258,16 @@ async def upload_holidays(file: UploadFile = File(...), db: Session = Depends(ge
         count = 0
         for _, row in df.iterrows():
             try:
-                # Converter data
+                # Converter data — dayfirst=False para preservar formato ISO (YYYY-MM-DD)
+                # e formato BR (DD/MM/YYYY) apenas quando o primeiro componente for > 12
                 raw_date = row['date']
                 if isinstance(raw_date, str):
-                    h_date = pd.to_datetime(raw_date, dayfirst=True).date()
+                    raw_str = raw_date.strip()
+                    # Detectar se é formato ISO (YYYY-MM-DD ou YYYY/MM/DD)
+                    use_dayfirst = not (len(raw_str) >= 4 and raw_str[:4].isdigit() and int(raw_str[:4]) > 31)
+                    h_date = pd.to_datetime(raw_str, dayfirst=use_dayfirst).date()
                 else:
-                    h_date = raw_date.date() if hasattr(raw_date, 'date') else pd.to_datetime(raw_date, dayfirst=True).date()
+                    h_date = raw_date.date() if hasattr(raw_date, 'date') else pd.to_datetime(raw_date).date()
                 
                 # Verificar se já existe
                 exists = db.query(Holiday).filter(Holiday.date == h_date).first()
@@ -253,6 +297,17 @@ async def upload_holidays(file: UploadFile = File(...), db: Session = Depends(ge
 # --- Recess ---
 @app.post("/recesses/", response_model=RecessRead)
 def create_recess(recess: RecessCreate, db: Session = Depends(get_db)):
+    if recess.start_date >= recess.end_date:
+        raise HTTPException(status_code=422, detail="A data de início deve ser anterior à data de fim.")
+    overlapping = db.query(Recess).filter(
+        Recess.start_date <= recess.end_date,
+        Recess.end_date >= recess.start_date,
+    ).first()
+    if overlapping:
+        raise HTTPException(
+            status_code=409,
+            detail=f"O período informado se sobrepõe com o recesso '{overlapping.description}' ({overlapping.start_date} – {overlapping.end_date})."
+        )
     db_recess = Recess(**recess.model_dump())
     db.add(db_recess)
     db.commit()
@@ -290,6 +345,20 @@ def generate_schedule(config: ScheduleConfigBase, db: Session = Depends(get_db))
             dates=result["dates"],
             skipped=result["skipped"],
             config=config
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/schedules/resolve-conflicts/", response_model=ResolvedScheduleResponse)
+def resolve_schedule_conflicts(request: ResolveConflictsRequest, db: Session = Depends(get_db)):
+    try:
+        cfg_model = ScheduleConfig(**request.config.model_dump())
+        resolutions = [r.model_dump() for r in request.resolutions]
+        result = ScheduleGeneratorService.resolve_conflicts(db, cfg_model, resolutions)
+        
+        return ResolvedScheduleResponse(
+            dates=result["dates"],
+            config=request.config
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -333,6 +402,75 @@ def delete_specific_schedule(config_id: int, db: Session = Depends(get_db)):
     db.delete(db_config)
     db.commit()
     return {"message": "Cronograma removido com sucesso"}
+
+@app.get("/schedules/export/xlsx")
+def export_schedules_xlsx(db: Session = Depends(get_db)):
+    DAYS_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    results = (
+        db.query(ScheduledClass)
+        .join(ScheduleConfig)
+        .join(MBA, ScheduleConfig.mba_id == MBA.id)
+        .join(Module, ScheduleConfig.module_id == Module.id)
+        .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .order_by(ScheduledClass.date)
+        .all()
+    )
+    rows = [
+        {
+            "MBA": sc.config.mba.name,
+            "Módulo": sc.config.module.name,
+            "Disciplina": sc.config.discipline.name,
+            "Formato": sc.config.format.value.capitalize(),
+            "Data": sc.date.strftime('%d/%m/%Y'),
+            "Dia da Semana": DAYS_PT[sc.date.weekday()],
+            "Nº da Aula": sc.order,
+            "Carga Horária (h)": sc.config.workload,
+        }
+        for sc in results
+    ]
+    df = pd.DataFrame(rows if rows else [{"MBA": "", "Módulo": "", "Disciplina": "", "Formato": "", "Data": "", "Dia da Semana": "", "Nº da Aula": "", "Carga Horária (h)": ""}])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Cronograma')
+        ws = writer.sheets['Cronograma']
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 4, 40)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="cronograma_MBA_2026.xlsx"'}
+    )
+
+@app.post("/schedules/export-preview/xlsx")
+def export_preview_xlsx(data: PreviewExportRequest):
+    DAYS_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    rows = [
+        {
+            "MBA": data.mba_name,
+            "Módulo": data.module_name,
+            "Disciplina": data.discipline_name,
+            "Formato": data.format.capitalize(),
+            "Data": d.strftime('%d/%m/%Y'),
+            "Dia da Semana": DAYS_PT[d.weekday()],
+            "Nº da Aula": i + 1,
+            "Carga Horária (h)": data.workload,
+        }
+        for i, d in enumerate(data.dates)
+    ]
+    df = pd.DataFrame(rows)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Preview')
+        ws = writer.sheets['Preview']
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 4, 40)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="cronograma_preview.xlsx"'}
+    )
 
 @app.get("/schedules/", response_model=List[CalendarEventRead])
 def list_all_scheduled_classes(db: Session = Depends(get_db)):

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from datetime import date
-from typing import List, Optional
+from typing import List, Literal, Optional
 from ..models.base import DeliveryFormat, RecurrenceType
 
 # --- MBA ---
@@ -105,6 +105,20 @@ class ScheduleConfigBase(BaseModel):
 class SkippedDate(BaseModel):
     date: date
     reason: str
+    suggested_date: Optional[date] = None
+
+class ConflictResolution(BaseModel):
+    original_date: date
+    action: str  # "auto" | "manual"
+    resolved_date: date
+
+class ResolveConflictsRequest(BaseModel):
+    config: ScheduleConfigBase
+    resolutions: List[ConflictResolution]
+
+class ResolvedScheduleResponse(BaseModel):
+    dates: List[date]
+    config: ScheduleConfigBase
 
 class ScheduleResponse(BaseModel):
     dates: List[date]
@@ -146,3 +160,12 @@ class FullScheduleRead(BaseModel):
     classes: List[ScheduledClassRead]
     class Config:
         from_attributes = True
+
+class PreviewExportRequest(BaseModel):
+    mba_name: str
+    module_name: str
+    discipline_name: str
+    format: str
+    workload: int
+    dates: List[date]
+    recurrence: str

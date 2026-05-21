@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Calendar, Plus, Trash2, Info, Upload as UploadIcon } from 'lucide-react';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const HolidayRecessList = () => {
   const [holidays, setHolidays] = useState<any[]>([]);
