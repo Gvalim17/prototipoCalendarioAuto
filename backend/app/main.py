@@ -42,7 +42,14 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MBA 2026 · Sistema de Calendário Inteligente")
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,https://calendarioauto.vercel.app"
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
