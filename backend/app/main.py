@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +19,7 @@ from .schemas.base_schemas import (
     ResolveConflictsRequest, ResolvedScheduleResponse
 )
 from .models.base import ScheduledClass
+from .services.holiday_importer import import_holidays, parse_holiday_file
 from .services.schedule_generator import ScheduleGeneratorService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, joinedload
@@ -29,7 +30,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Database
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db").strip()
 # Heroku/some providers use postgres:// — SQLAlchemy 2.x requires postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -234,77 +235,23 @@ def delete_holiday(holiday_id: int, db: Session = Depends(get_db)):
     return {"message": "Feriado removido com sucesso"}
 
 @app.post("/holidays/upload/")
-async def upload_holidays(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_holidays(
+    file: UploadFile = File(...),
+    year: int = Form(2026),
+    db: Session = Depends(get_db),
+):
     try:
         content = await file.read()
-        
-        # Detectar formato baseado na extensão ou conteúdo
-        if file.filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(content))
-        elif file.filename.endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(io.BytesIO(content))
-        else:
-            raise HTTPException(status_code=400, detail="Formato de arquivo não suportado. Use CSV ou Excel.")
-
-        # Normalização de colunas (caso o usuário use nomes diferentes)
-        # Esperado: Data, Descrição, Tipo
-        df.columns = [c.lower().strip() for c in df.columns]
-        
-        column_map = {
-            'data': 'date',
-            'date': 'date',
-            'descrição': 'description',
-            'descricao': 'description',
-            'description': 'description',
-            'tipo': 'type',
-            'type': 'type'
-        }
-        
-        df = df.rename(columns=column_map)
-        
-        # Validar colunas obrigatórias
-        required = ['date', 'description']
-        if not all(col in df.columns for col in required):
-            raise HTTPException(status_code=400, detail=f"O arquivo deve conter colunas de Data e Descrição. Colunas encontradas: {list(df.columns)}")
-
-        count = 0
-        for _, row in df.iterrows():
-            try:
-                # Converter data — dayfirst=False para preservar formato ISO (YYYY-MM-DD)
-                # e formato BR (DD/MM/YYYY) apenas quando o primeiro componente for > 12
-                raw_date = row['date']
-                if isinstance(raw_date, str):
-                    raw_str = raw_date.strip()
-                    # Detectar se é formato ISO (YYYY-MM-DD ou YYYY/MM/DD)
-                    use_dayfirst = not (len(raw_str) >= 4 and raw_str[:4].isdigit() and int(raw_str[:4]) > 31)
-                    h_date = pd.to_datetime(raw_str, dayfirst=use_dayfirst).date()
-                else:
-                    h_date = raw_date.date() if hasattr(raw_date, 'date') else pd.to_datetime(raw_date).date()
-                
-                # Verificar se já existe
-                exists = db.query(Holiday).filter(Holiday.date == h_date).first()
-                if exists:
-                    # Atualizar se já existir
-                    exists.description = str(row['description'])
-                    exists.type = str(row.get('type', 'nacional'))
-                else:
-                    new_h = Holiday(
-                        date=h_date,
-                        description=str(row['description']),
-                        type=str(row.get('type', 'nacional'))
-                    )
-                    db.add(new_h)
-                count += 1
-            except Exception as e:
-                print(f"Erro ao processar linha: {row}. Erro: {e}")
-                continue
-        
-        db.commit()
-        return {"message": f"Sucesso! {count} feriados processados.", "total": count}
-        
+        parsed = parse_holiday_file(file.filename or "", content, default_year=year)
+        result = import_holidays(db, parsed["rows"], parsed["errors"])
+        result["columns"] = parsed["columns"]
+        return result
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao importar feriados: {str(e)}")
 
 # --- Recess ---
 @app.post("/recesses/", response_model=RecessRead)

@@ -1,14 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import { Calendar, Plus, Trash2, Info, Upload as UploadIcon } from 'lucide-react';
+import { AlertCircle, Calendar, CheckCircle2, FileText, Plus, Trash2, Info, Upload as UploadIcon, X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+interface HolidayImportResult {
+  message: string;
+  total: number;
+  total_rows: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  errors: Array<{ row: number; field: string; message: string }>;
+}
 
 const HolidayRecessList = () => {
   const [holidays, setHolidays] = useState<any[]>([]);
   const [recesses, setRecesses] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'holidays' | 'recesses'>('holidays');
   const [uploading, setUploading] = useState(false);
+  const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
+  const [importResult, setImportResult] = useState<HolidayImportResult | null>(null);
+  const [importYear, setImportYear] = useState(2026);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   
   // Forms
   const [holidayForm, setHolidayForm] = useState({ date: '', description: '', type: 'nacional' });
@@ -51,26 +66,51 @@ const HolidayRecessList = () => {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setSelectedImportFile(file);
+    setImportResult(null);
+  };
 
+  const importSelectedFile = async () => {
+    if (!selectedImportFile) return;
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', selectedImportFile);
+    formData.append('year', String(importYear));
 
     try {
       setUploading(true);
       const res = await axios.post(`${API_URL}/holidays/upload/`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      alert(res.data.message);
+      setImportResult(res.data);
+      setSelectedImportFile(null);
       fetchData();
     } catch (error: any) {
-      alert('Erro no upload: ' + (error.response?.data?.detail || error.message));
+      setImportResult({
+        message: error.response?.data?.detail || error.message || 'Erro ao importar arquivo.',
+        total: 0,
+        total_rows: 0,
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        failed: 1,
+        errors: []
+      });
     } finally {
       setUploading(false);
-      // Reset input
-      e.target.value = '';
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const clearImportSelection = () => {
+    setSelectedImportFile(null);
+    setImportResult(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -231,25 +271,124 @@ const HolidayRecessList = () => {
           </div>
 
           {activeTab === 'holidays' && (
-            <div className="glass p-6 rounded-3xl border border-dashed border-slate-700 bg-blue-500/5 hover:border-blue-500/50 transition-all text-center">
-              <label className="cursor-pointer block space-y-3 py-4">
-                <input 
-                  type="file" 
-                  accept=".csv, .xlsx, .xls"
-                  className="hidden" 
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                />
-                <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+            <div className="glass p-6 rounded-3xl border border-slate-800 bg-blue-500/5 space-y-5">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 flex items-center justify-center shrink-0">
                   <UploadIcon size={24} />
                 </div>
-                <div>
-                  <h4 className="text-white font-black text-xs uppercase">Importar Lista</h4>
-                  <p className="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-tighter">
-                    {uploading ? 'Processando...' : 'Arraste ou selecione CSV / Excel'}
+                <div className="text-left min-w-0">
+                  <h4 className="text-white font-black text-xs uppercase">Importar Feriados</h4>
+                  <p className="text-[10px] text-slate-500 mt-1 font-bold leading-relaxed">
+                    CSV com Data, Feriado, Esfera, Tipo e Observações. Datas DD/MM e Data móvel usam o ano abaixo.
                   </p>
                 </div>
-              </label>
+              </div>
+
+              <input 
+                ref={fileInputRef}
+                type="file" 
+                accept=".csv, .xlsx, .xls"
+                className="hidden" 
+                onChange={handleFileSelect}
+                disabled={uploading}
+              />
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 space-y-3">
+                <div className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                  <FileText size={14} />
+                  Modelo esperado
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
+                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-300 border border-slate-800">Data</span>
+                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-300 border border-slate-800">Feriado</span>
+                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-500 border border-slate-800">Esfera</span>
+                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-500 border border-slate-800">Tipo</span>
+                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-500 border border-slate-800 col-span-2">Observações</span>
+                </div>
+              </div>
+
+              <FormGroup label="Ano de Referência">
+                <input
+                  type="number"
+                  min={1900}
+                  max={2200}
+                  className="input-custom"
+                  value={importYear}
+                  onChange={(e) => setImportYear(Number(e.target.value) || 2026)}
+                />
+              </FormGroup>
+
+              {selectedImportFile ? (
+                <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 text-left">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-white truncate">{selectedImportFile.name}</p>
+                      <p className="text-[10px] text-blue-300 font-bold mt-1">
+                        {(selectedImportFile.size / 1024).toFixed(1)} KB selecionado
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={clearImportSelection}
+                      className="p-2 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-all"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="w-full h-12 rounded-2xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-blue-500/50 hover:bg-blue-500/10 transition-all font-black text-[10px] uppercase tracking-widest"
+                >
+                  Selecionar arquivo
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={importSelectedFile}
+                disabled={!selectedImportFile || uploading}
+                className="w-full h-12 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-800 disabled:text-slate-600 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-500/20 uppercase tracking-tighter"
+              >
+                {uploading ? 'Importando...' : 'Importar e Atualizar Base'}
+              </button>
+
+              {importResult && (
+                <div className={`rounded-2xl border p-4 text-left space-y-3 ${
+                  importResult.failed > 0 ? 'border-amber-500/30 bg-amber-500/10' : 'border-emerald-500/30 bg-emerald-500/10'
+                }`}>
+                  <div className="flex items-start gap-2">
+                    {importResult.failed > 0 ? (
+                      <AlertCircle size={18} className="text-amber-400 shrink-0 mt-0.5" />
+                    ) : (
+                      <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-0.5" />
+                    )}
+                    <p className="text-xs font-bold text-slate-200 leading-relaxed">{importResult.message}</p>
+                  </div>
+
+                  {importResult.total_rows > 0 && (
+                    <div className="grid grid-cols-4 gap-2 text-center">
+                      <ImportStat label="Criados" value={importResult.created} />
+                      <ImportStat label="Atual." value={importResult.updated} />
+                      <ImportStat label="Iguais" value={importResult.unchanged} />
+                      <ImportStat label="Erros" value={importResult.failed} />
+                    </div>
+                  )}
+
+                  {importResult.errors.length > 0 && (
+                    <div className="space-y-2 max-h-36 overflow-y-auto custom-scrollbar pr-1">
+                      {importResult.errors.map((err, idx) => (
+                        <div key={`${err.row}-${err.field}-${idx}`} className="text-[10px] text-amber-200 bg-slate-950/50 border border-amber-500/20 rounded-xl px-3 py-2">
+                          Linha {err.row}, {err.field}: {err.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -342,6 +481,13 @@ const FormGroup = ({ label, children }: any) => (
       <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">{label}</label>
       {children}
     </div>
+);
+
+const ImportStat = ({ label, value }: { label: string; value: number }) => (
+  <div className="rounded-xl bg-slate-950/50 border border-slate-800 px-2 py-2">
+    <div className="text-sm font-black text-white">{value}</div>
+    <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{label}</div>
+  </div>
 );
 
 export default HolidayRecessList;
