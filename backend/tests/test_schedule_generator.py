@@ -2,7 +2,7 @@ import pytest
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from unittest.mock import MagicMock
-from app.models.base import Holiday, Recess, ScheduleConfig, RecurrenceType
+from app.models.base import Holiday, Recess, ScheduleConfig, RecurrenceType, HolidayPolicy
 from app.services.schedule_generator import ScheduleGeneratorService
 
 
@@ -16,109 +16,118 @@ def _make_db(holidays=None, recesses=None):
     return db
 
 
-# ── RF-06: Geração de cronograma ─────────────────────────────────────────────
-
-def test_generate_weekly_schedule_no_blocks():
-    db = _make_db()
-    config = ScheduleConfig(
-        start_date=date(2026, 10, 5),  # Segunda
-        num_classes=4,
+def _config(**kwargs):
+    defaults = dict(
         recurrence=RecurrenceType.SEMANAL,
-        day_of_week=0,
+        holiday_policy=HolidayPolicy.RESCHEDULE,
     )
-    result = ScheduleGeneratorService.generate_schedule(db, config)
-    dates = result["dates"]
-    assert len(dates) == 4
-    assert dates[0] == date(2026, 10, 5)
-    assert dates[1] == date(2026, 10, 12)
-    assert dates[2] == date(2026, 10, 19)
-    assert dates[3] == date(2026, 10, 26)
+    defaults.update(kwargs)
+    return ScheduleConfig(**defaults)
 
 
-def test_generate_quinzenal_schedule_no_blocks():
+# ── RF-06: Geração por faixa de datas ────────────────────────────────────────
+
+def test_generate_weekly_single_day():
     db = _make_db()
-    config = ScheduleConfig(
-        start_date=date(2026, 3, 7),  # Sábado
-        num_classes=3,
+    config = _config(
+        start_date=date(2026, 10, 5),   # Segunda
+        end_date=date(2026, 10, 26),    # Segunda
+        days_of_week="0",
+    )
+    dates = ScheduleGeneratorService.generate_schedule(db, config)["dates"]
+    assert dates == [
+        date(2026, 10, 5), date(2026, 10, 12),
+        date(2026, 10, 19), date(2026, 10, 26),
+    ]
+
+
+def test_generate_weekly_multiple_days():
+    """Segunda (0) e Quarta (2) na mesma semana."""
+    db = _make_db()
+    config = _config(
+        start_date=date(2026, 10, 5),   # Segunda
+        end_date=date(2026, 10, 14),    # Quarta
+        days_of_week="0,2",
+    )
+    dates = ScheduleGeneratorService.generate_schedule(db, config)["dates"]
+    assert dates == [
+        date(2026, 10, 5), date(2026, 10, 7),
+        date(2026, 10, 12), date(2026, 10, 14),
+    ]
+
+
+def test_generate_quinzenal():
+    db = _make_db()
+    config = _config(
+        start_date=date(2026, 3, 7),    # Sábado
+        end_date=date(2026, 4, 4),
+        days_of_week="5",
         recurrence=RecurrenceType.QUINZENAL,
-        day_of_week=5,
     )
-    result = ScheduleGeneratorService.generate_schedule(db, config)
-    dates = result["dates"]
-    assert len(dates) == 3
-    assert dates[0] == date(2026, 3, 7)
-    assert dates[1] == date(2026, 3, 21)
-    assert dates[2] == date(2026, 4, 4)
+    dates = ScheduleGeneratorService.generate_schedule(db, config)["dates"]
+    assert dates == [date(2026, 3, 7), date(2026, 3, 21), date(2026, 4, 4)]
 
 
-def test_generate_master_class_single_date():
-    """RecurrenceType.NA é usado para Masterclass (evento único)."""
+def test_generate_single_event_na():
     db = _make_db()
-    config = ScheduleConfig(
+    config = _config(
         start_date=date(2026, 5, 15),
-        num_classes=1,
         recurrence=RecurrenceType.NA,
-        day_of_week=4,
+        days_of_week="",
     )
-    result = ScheduleGeneratorService.generate_schedule(db, config)
-    dates = result["dates"]
-    assert len(dates) == 1
-    assert dates[0] == date(2026, 5, 15)
+    dates = ScheduleGeneratorService.generate_schedule(db, config)["dates"]
+    assert dates == [date(2026, 5, 15)]
 
 
-# ── RF-07/RF-08: Detecção e sugestão de conflitos ────────────────────────────
+# ── Política de feriado ──────────────────────────────────────────────────────
 
-def test_generate_schedule_skipping_holiday():
+def test_skip_policy_drops_class_and_reduces_total():
     holiday = Holiday(date=date(2026, 10, 12), description="Feriado Teste")
     db = _make_db(holidays=[holiday])
-    config = ScheduleConfig(
+    config = _config(
         start_date=date(2026, 10, 5),
-        num_classes=2,
-        recurrence=RecurrenceType.SEMANAL,
-        day_of_week=0,
+        end_date=date(2026, 10, 26),
+        days_of_week="0",
+        holiday_policy=HolidayPolicy.SKIP,
     )
     result = ScheduleGeneratorService.generate_schedule(db, config)
-    dates = result["dates"]
-    assert len(dates) == 2
-    assert dates[0] == date(2026, 10, 5)
-    assert dates[1] == date(2026, 10, 19)
+    assert result["dates"] == [date(2026, 10, 5), date(2026, 10, 19), date(2026, 10, 26)]
+    assert len(result["skipped"]) == 1
+    assert result["skipped"][0]["date"] == date(2026, 10, 12)
+    assert result["skipped"][0]["suggested_date"] is None
 
 
-def test_generate_schedule_skipping_recess():
-    recess = Recess(start_date=date(2026, 10, 10), end_date=date(2026, 10, 20))
-    db = _make_db(recesses=[recess])
-    config = ScheduleConfig(
-        start_date=date(2026, 10, 5),
-        num_classes=2,
-        recurrence=RecurrenceType.SEMANAL,
-        day_of_week=0,
-    )
-    result = ScheduleGeneratorService.generate_schedule(db, config)
-    dates = result["dates"]
-    assert len(dates) == 2
-    assert dates[0] == date(2026, 10, 5)
-    assert dates[1] == date(2026, 10, 26)
-
-
-def test_skipped_dates_populated():
-    """Verifica que skipped contém motivo e suggested_date."""
+def test_reschedule_policy_suggests_replacement():
     holiday = Holiday(date=date(2026, 10, 12), description="Feriado Nacional")
     db = _make_db(holidays=[holiday])
-    config = ScheduleConfig(
+    config = _config(
         start_date=date(2026, 10, 5),
-        num_classes=2,
-        recurrence=RecurrenceType.SEMANAL,
-        day_of_week=0,
+        end_date=date(2026, 10, 26),
+        days_of_week="0",
+        holiday_policy=HolidayPolicy.RESCHEDULE,
     )
     result = ScheduleGeneratorService.generate_schedule(db, config)
-    skipped = result["skipped"]
-    assert len(skipped) == 1
-    assert skipped[0]["date"] == date(2026, 10, 12)
-    assert "Feriado Nacional" in skipped[0]["reason"]
-    assert skipped[0]["suggested_date"] == date(2026, 10, 19)
+    # A data do feriado sai da lista principal e vira sugestão de reposição
+    assert date(2026, 10, 12) not in result["dates"]
+    assert len(result["skipped"]) == 1
+    assert "Feriado Nacional" in result["skipped"][0]["reason"]
+    assert result["skipped"][0]["suggested_date"] == date(2026, 10, 13)
 
 
-# ── is_blocked (recebe tuples, não ORM) ──────────────────────────────────────
+def test_recess_blocks_range():
+    recess = Recess(start_date=date(2026, 10, 10), end_date=date(2026, 10, 20))
+    db = _make_db(recesses=[recess])
+    config = _config(
+        start_date=date(2026, 10, 5),
+        end_date=date(2026, 10, 26),
+        days_of_week="0",
+        holiday_policy=HolidayPolicy.SKIP,
+    )
+    result = ScheduleGeneratorService.generate_schedule(db, config)
+    assert result["dates"] == [date(2026, 10, 5), date(2026, 10, 26)]
+
+
+# ── is_blocked / find_next_valid ─────────────────────────────────────────────
 
 def test_is_blocked_by_holiday():
     holidays = {date(2026, 11, 2): "Finados"}
@@ -127,15 +136,12 @@ def test_is_blocked_by_holiday():
 
 
 def test_is_blocked_by_recess_boundaries():
-    # is_blocked recebe tuples (start, end, desc) — como generate_schedule passa
     recess_tuple = (date(2026, 7, 6), date(2026, 7, 17), "Recesso Julho")
     assert ScheduleGeneratorService.is_blocked(date(2026, 7, 6), {}, [recess_tuple]) is True
     assert ScheduleGeneratorService.is_blocked(date(2026, 7, 17), {}, [recess_tuple]) is True
     assert ScheduleGeneratorService.is_blocked(date(2026, 7, 5), {}, [recess_tuple]) is False
     assert ScheduleGeneratorService.is_blocked(date(2026, 7, 18), {}, [recess_tuple]) is False
 
-
-# ── find_next_valid ───────────────────────────────────────────────────────────
 
 def test_find_next_valid_skips_holiday():
     holidays = {date(2026, 10, 12): "Feriado"}
@@ -148,3 +154,27 @@ def test_find_next_valid_returns_none_when_all_blocked():
     holidays = {start + timedelta(days=i): "blk" for i in range(10)}
     result = ScheduleGeneratorService.find_next_valid(start, holidays, [], max_search=5)
     assert result is None
+
+
+# ── resolve_conflicts ────────────────────────────────────────────────────────
+
+def test_resolve_conflicts_adds_replacement_date():
+    holiday = Holiday(date=date(2026, 10, 12), description="Feriado Nacional")
+    db = _make_db(holidays=[holiday])
+    config = _config(
+        start_date=date(2026, 10, 5),
+        end_date=date(2026, 10, 26),
+        days_of_week="0",
+        holiday_policy=HolidayPolicy.RESCHEDULE,
+    )
+    result = ScheduleGeneratorService.resolve_conflicts(db, config, [{
+        "original_date": date(2026, 10, 12),
+        "action": "manual",
+        "resolved_date": date(2026, 10, 13),
+    }])
+    assert result["dates"] == [
+        date(2026, 10, 5),
+        date(2026, 10, 13),
+        date(2026, 10, 19),
+        date(2026, 10, 26),
+    ]

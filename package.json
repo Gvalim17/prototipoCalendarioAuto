@@ -7,8 +7,9 @@
     "dev": "concurrently \"npm run dev:back\" \"npm run dev:front\"",
     "dev:back": "cd backend && .venv/bin/uvicorn app.main:app --reload",
     "dev:front": "cd frontend && npm run dev",
-    "install:all": "npm install && cd frontend && npm install && cd ../backend && python -m venv .venv && echo 'Virtualenv criado. Instale os requisitos manualmente ou via script de setup.'",
-    "setup:back": "cd backend && pip install -r requirements.txt"
+    "install:all": "npm install && cd frontend && npm install && cd ../backend && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt",
+    "migrate:back": "cd backend && .venv/bin/alembic upgrade head",
+    "setup:back": "cd backend && .venv/bin/python -m pip install -r requirements.txt"
   },
   "dependencies": {
     "concurrently": "^8.2.2"

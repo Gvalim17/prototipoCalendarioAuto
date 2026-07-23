@@ -1,997 +1,740 @@
-import { useState, useEffect } from 'react';
-import { Calendar, BookOpen, CheckCircle2, AlertCircle, Info, ArrowLeft, ChevronRight, Hash, Clock, CalendarDays, List as ListIcon, HelpCircle, GraduationCap, Coffee, Download, Star } from 'lucide-react';
-import axios from 'axios';
+import { ReactNode, useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  Calendar, BookOpen, CheckCircle2, AlertCircle, ArrowLeft, ChevronRight, Clock,
+  CalendarDays, List as ListIcon, GraduationCap, Download, RefreshCw, XCircle, Star,
+} from 'lucide-react';
+import api from '../api/client';
+import {
+  WEEKDAYS,
+  type Course, type Discipline, type Holiday, type Module, type Recurrence, type HolidayPolicy,
+  type ScheduleConfigRead,
+} from '../types/domain';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+interface FormData {
+  course_id: number;
+  module_id: number;
+  discipline_id: number;
+  format: 'presencial' | 'remoto';
+  start_date: string;
+  end_date: string;
+  recurrence: Recurrence;
+  days_of_week: number[];
+  start_time: string;
+  end_time: string;
+  holiday_policy: HolidayPolicy;
+}
 
-const ScheduleForm = () => {
-    const [loading, setLoading] = useState(false);
-    const [step, setStep] = useState(1);
-    const [mbas, setMbas] = useState<any[]>([]);
-    const [modules, setModules] = useState<any[]>([]);
-    const [disciplines, setDisciplines] = useState<any[]>([]);
-    const [holidays, setHolidays] = useState<any[]>([]);
-    const [showConfirmation, setShowConfirmation] = useState(false);
-    const [generatedResult, setGeneratedResult] = useState<{ dates: string[], skipped: any[] }>({ dates: [], skipped: [] });
-    const [viewMode, setViewMode] = useState<'list' | 'calendar'>('calendar');
-    
-    // State for Calendar Grid
-    const [currentMonth, setCurrentMonth] = useState(new Date());
-    
-    const [showDatePicker, setShowDatePicker] = useState(false);
-    const [pickerMonth, setPickerMonth] = useState(new Date());
+interface SkippedDate { date: string; reason: string; suggested_date?: string | null; }
+interface GenerateResponse { dates: string[]; skipped: SkippedDate[]; num_classes: number; total_workload: number; }
 
-    // RF-09: conflict override state
-    const [conflictOverrides, _setConflictOverrides] = useState<Record<string, string>>({});
-    const [activeConflictPicker, setActiveConflictPicker] = useState<string | null>(null);
-    const [conflictPickerMonth, setConflictPickerMonth] = useState(new Date());
-    const [showRecalcModal, setShowRecalcModal] = useState(false);
-    const [pendingOverride, setPendingOverride] = useState<{ conflictDate: string; overrideDate: string } | null>(null);
-    
-    // RF-07/RF-08: batch conflict resolution state
-    const [resolutions, setResolutions] = useState<Record<string, { action: 'auto' | 'manual'; resolved_date: string }>>({});
-    
-    const [formData, setFormData] = useState({
-        mba_id: 0,
-        module_id: 0,
-        discipline_id: 0,
-        format: 'presencial',
-        workload: 24,
-        start_date: '',
-        recurrence: 'quinzenal',
-        day_of_week: 5, 
-        num_classes: 4
-    });
-
-    useEffect(() => {
-        fetchMBAs();
-        fetchHolidays();
-    }, []);
-
-    const fetchMBAs = async () => {
-        try {
-            const res = await axios.get(`${API_BASE}/mbas/`);
-            setMbas(res.data);
-        } catch (err) {
-            console.error("Erro ao buscar MBAs", err);
-        }
-    };
-
-    const fetchHolidays = async () => {
-        try {
-            const res = await axios.get(`${API_BASE}/holidays/`);
-            setHolidays(res.data);
-        } catch (err) {
-            console.error("Erro ao buscar feriados");
-        }
-    };
-
-    const fetchModules = async (mbaId: number) => {
-        try {
-            const res = await axios.get(`${API_BASE}/mbas/${mbaId}/modules`);
-            setModules(res.data);
-            setFormData(prev => ({ ...prev, module_id: 0, discipline_id: 0 }));
-        } catch (err) {
-            console.error("Erro ao buscar módulos");
-        }
-    };
-
-    const fetchDisciplines = async (moduleId: number) => {
-        try {
-            const res = await axios.get(`${API_BASE}/modules/${moduleId}/disciplines`);
-            setDisciplines(res.data);
-            setFormData(prev => ({ ...prev, discipline_id: 0 }));
-        } catch (err) {
-            console.error("Erro ao buscar disciplinas");
-        }
-    };
-
-    const handleGenerate = async () => {
-        if (!formData.discipline_id || !formData.start_date) {
-            alert("Preencha todos os campos obrigatórios.");
-            return;
-        }
-
-        setLoading(true);
-        setShowConfirmation(false);
-        try {
-            const startDateObj = new Date(formData.start_date + 'T00:00:00');
-            const jsDay = startDateObj.getDay(); 
-            const pyDay = jsDay === 0 ? 6 : jsDay - 1; 
-
-            const res = await axios.post(`${API_BASE}/generate-schedule/`, {
-                ...formData,
-                day_of_week: pyDay
-            });
-            setGeneratedResult({ dates: res.data.dates, skipped: res.data.skipped });
-            
-            if (res.data.dates.length > 0) {
-                setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
-            }
-            
-            if (res.data.skipped.length > 0) {
-                const initial: Record<string, { action: 'auto' | 'manual'; resolved_date: string }> = {};
-                for (const s of res.data.skipped) {
-                    if (s.suggested_date) {
-                        initial[s.date] = { action: 'auto', resolved_date: s.suggested_date };
-                    }
-                }
-                setResolutions(initial);
-                setStep(2);
-            } else {
-                setStep(3);
-            }
-        } catch (err: any) {
-            alert("Erro ao gerar: " + (err.response?.data?.detail || err.message));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleApplyResolutions = async () => {
-        const startDateObj = new Date(formData.start_date + 'T00:00:00');
-        const jsDay = startDateObj.getDay();
-        const pyDay = jsDay === 0 ? 6 : jsDay - 1;
-        setLoading(true);
-        try {
-            const resolutionList = generatedResult.skipped.map((s: any) => {
-                const r = resolutions[s.date];
-                return {
-                    original_date: s.date,
-                    action: r?.action ?? 'auto',
-                    resolved_date: r?.resolved_date ?? s.suggested_date ?? s.date,
-                };
-            });
-            const res = await axios.post(`${API_BASE}/schedules/resolve-conflicts/`, {
-                config: { ...formData, day_of_week: pyDay },
-                resolutions: resolutionList,
-            });
-            setGeneratedResult({ dates: res.data.dates, skipped: [] });
-            if (res.data.dates.length > 0) {
-                setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
-            }
-            setStep(3);
-        } catch (err: any) {
-            alert('Erro ao aplicar resoluções: ' + (err.response?.data?.detail || err.message));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleFinalSave = async () => {
-        setLoading(true);
-        try {
-            const payload = {
-                config: {
-                    ...formData,
-                    day_of_week: new Date(formData.start_date + 'T00:00:00').getDay() === 0 ? 6 : new Date(formData.start_date + 'T00:00:00').getDay() - 1
-                },
-                classes: generatedResult.dates.map((d, i) => ({
-                    date: d,
-                    order: i + 1
-                }))
-            };
-            await axios.post(`${API_BASE}/schedules/`, payload);
-            alert("Cronograma salvo e registrado com sucesso!");
-            setStep(1);
-        } catch (err: any) {
-            alert("Erro ao salvar cronograma: " + (err.response?.data?.detail || err.message));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // RF-09: apply conflict override
-    // RF-09: apply conflict override
-    const applyOverride = (conflictDate: string, overrideDate: string) => {
-        setActiveConflictPicker(null);
-        setPendingOverride({ conflictDate, overrideDate });
-        setShowRecalcModal(true);
-    };
-
-    const resolveConflict = async (action: 'manual' | 'recalculate') => {
-        if (!pendingOverride) return;
-        setLoading(true);
-        try {
-            const res = await axios.post(`${API_BASE}/resolve-conflicts/`, {
-                config: {
-                    ...formData,
-                    day_of_week: new Date(formData.start_date + 'T00:00:00').getDay() === 0 ? 6 : new Date(formData.start_date + 'T00:00:00').getDay() - 1
-                },
-                resolutions: [{
-                    original_date: pendingOverride.conflictDate,
-                    resolved_date: pendingOverride.overrideDate,
-                    action: action
-                }]
-            });
-            setGeneratedResult({ dates: res.data.dates, skipped: res.data.skipped || [] });
-            setShowRecalcModal(false);
-            setPendingOverride(null);
-        } catch (err: any) {
-            alert("Erro ao resolver conflito: " + (err.response?.data?.detail || err.message));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const confirmOverrideWithRecalc = () => resolveConflict('recalculate');
-    const confirmOverrideNoRecalc = () => resolveConflict('manual');
-
-    // RF-12: export preview as xlsx
-    const handleExportPreview = async () => {
-        try {
-            const { mba, mod, disc } = getSelectionLabels();
-            const res = await axios.post(`${API_BASE}/schedules/export-preview/xlsx`, {
-                mba_name: mba || 'MBA',
-                module_name: mod || 'Módulo',
-                discipline_name: disc || 'Disciplina',
-                format: formData.format,
-                workload: formData.workload,
-                dates: generatedResult.dates,
-                recurrence: formData.recurrence,
-            }, { responseType: 'blob' });
-            const url = window.URL.createObjectURL(new Blob([res.data]));
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', 'cronograma_preview.xlsx');
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.URL.revokeObjectURL(url);
-        } catch {
-            alert('Erro ao exportar cronograma.');
-        }
-    };
-
-    const checkHolidayProximity = (dateStr: string) => {
-        const classDate = new Date(dateStr + 'T00:00:00');
-        const warningDays = 2; 
-        
-        for (const holiday of holidays) {
-            const hDate = new Date(holiday.date + 'T00:00:00');
-            const diffTime = hDate.getTime() - classDate.getTime();
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            
-            if (diffDays <= warningDays && diffDays >= -warningDays && diffDays !== 0) {
-                return holiday;
-            }
-        }
-        return null;
-    };
-
-    // Calendar Helper Functions
-    const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
-    const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay();
-
-    const renderCalendarGrid = () => {
-        const year = currentMonth.getFullYear();
-        const month = currentMonth.getMonth();
-        const daysInMonth = getDaysInMonth(year, month);
-        const firstDay = getFirstDayOfMonth(year, month);
-        const days = [];
-
-        // Adding empty cells for days before the 1st
-        for (let i = 0; i < firstDay; i++) {
-            days.push(<div key={`empty-${i}`} className="h-24 border border-slate-800/30"></div>);
-        }
-
-        for (let d = 1; d <= daysInMonth; d++) {
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-            const isClass = generatedResult.dates.indexOf(dateStr) !== -1;
-            const classIndex = generatedResult.dates.indexOf(dateStr) + 1;
-            const holiday = holidays.find(h => h.date === dateStr);
-            const nearHoliday = !holiday ? checkHolidayProximity(dateStr) : null;
-            const skipped = generatedResult.skipped.find(s => s.date === dateStr);
-
-            days.push(
-                <div key={d} className={`h-24 border border-slate-800/50 p-2 relative transition-all group hover:bg-slate-800/20 ${holiday || skipped ? 'bg-slate-900/40' : ''}`}>
-                    <span className={`text-[10px] font-bold ${holiday || skipped ? 'text-slate-600' : 'text-slate-500'}`}>{d}</span>
-                    
-                    <div className="mt-1 flex flex-col gap-1">
-                        {isClass && (
-                            <div className={`${formData.recurrence === 'na' ? 'bg-purple-600 shadow-purple-500/20' : 'bg-blue-600 shadow-blue-500/20'} shadow-lg text-white text-[9px] font-black py-1 px-2 rounded-lg flex items-center justify-between animate-in zoom-in-75`}>
-                                <span>{formData.recurrence === 'na' ? 'MASTER CLASS' : `AULA ${classIndex}`}</span>
-                                {formData.recurrence === 'na' ? <Star size={10} /> : <CheckCircle2 size={10} />}
-                            </div>
-                        )}
-                        {holiday && (
-                            <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-[8px] font-black py-1 px-1.5 rounded-md truncate uppercase tracking-tighter" title={holiday.description}>
-                                {holiday.description}
-                            </div>
-                        )}
-                        {skipped && (
-                            <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[8px] font-black py-1 px-1.5 rounded-md truncate uppercase tracking-tighter" title={skipped.reason}>
-                                BLOQUEADO
-                            </div>
-                        )}
-                        {nearHoliday && isClass && (
-                            <div className="flex items-center gap-1 text-amber-500/80 animate-pulse mt-1" title={`Próximo a: ${nearHoliday.description}`}>
-                                <AlertCircle size={10} />
-                                <span className="text-[7px] font-bold uppercase">Emenda?</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-
-        return days;
-    };
-
-    const getSelectionLabels = () => {
-        const mba = mbas.find(m => m.id === formData.mba_id)?.name;
-        const mod = modules.find(m => m.id === formData.module_id)?.name;
-        const disc = disciplines.find(d => d.id === formData.discipline_id)?.name;
-        return { mba, mod, disc };
-    };
-
-    return (
-        <div className="max-w-6xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 pb-20">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div>
-                    <h2 className="text-3xl font-bold text-white tracking-tight">Gerador Inteligente</h2>
-                    <p className="text-slate-400">Ponto facultativo e cronograma automático.</p>
-                </div>
-                <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-sm ${step === 1 ? 'bg-blue-600 shadow-lg shadow-blue-500/20' : 'bg-blue-600/30'} text-white transition-all`}>1</div>
-                    <div className="w-12 h-0.5 bg-slate-800"></div>
-                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-sm ${step === 2 ? 'bg-blue-600 shadow-lg shadow-blue-500/20' : 'bg-slate-800'} text-slate-500 transition-all`}>2</div>
-                </div>
-            </div>
-
-            {step === 1 && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    <div className="lg:col-span-2 space-y-6">
-                        <section className="glass rounded-3xl p-8 border border-slate-800 space-y-6 shadow-xl">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
-                                <BookOpen className="text-blue-500" size={20} />
-                                Estrutura Acadêmica
-                            </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <FormGroup label="MBA / Curso" icon={<GraduationCap size={14} className="text-blue-500" />}>
-                                    <div className="relative group/input">
-                                        <select 
-                                            className="select-custom"
-                                            value={formData.mba_id}
-                                            onChange={(e) => {
-                                                const val = parseInt(e.target.value);
-                                                setFormData({...formData, mba_id: val});
-                                                if (val) fetchModules(val);
-                                            }}
-                                        >
-                                            <option value={0}>Selecione o MBA</option>
-                                            {mbas.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                        </select>
-                                    </div>
-                                </FormGroup>
-
-                                <FormGroup label="Módulo" icon={<BookOpen size={14} className="text-emerald-500" />}>
-                                    <div className="relative group/input">
-                                        <select 
-                                            disabled={!formData.mba_id}
-                                            className="select-custom"
-                                            value={formData.module_id}
-                                            onChange={(e) => {
-                                                const val = parseInt(e.target.value);
-                                                setFormData({...formData, module_id: val});
-                                                if (val) fetchDisciplines(val);
-                                            }}
-                                        >
-                                            <option value={0}>Selecione o Módulo</option>
-                                            {modules.map(mod => <option key={mod.id} value={mod.id}>{mod.name}</option>)}
-                                        </select>
-                                    </div>
-                                </FormGroup>
-
-                                <FormGroup label="Disciplina" icon={<CheckCircle2 size={14} className="text-blue-400" />}>
-                                    <div className="relative group/input">
-                                        <select 
-                                            disabled={!formData.module_id}
-                                            className="select-custom"
-                                            value={formData.discipline_id}
-                                            onChange={(e) => setFormData({...formData, discipline_id: parseInt(e.target.value)})}
-                                        >
-                                            <option value={0}>Selecione a Disciplina</option>
-                                            {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                                        </select>
-                                    </div>
-                                </FormGroup>
-
-                                <FormGroup label="Formato" icon={<Coffee size={14} className="text-rose-400" />}>
-                                    <div className="relative group/input">
-                                        <select 
-                                            className="select-custom"
-                                            value={formData.format}
-                                            onChange={(e) => setFormData({...formData, format: e.target.value})}
-                                        >
-                                            <option value="presencial">Presencial</option>
-                                            <option value="remoto">Remoto / Online</option>
-                                        </select>
-                                    </div>
-                                </FormGroup>
-                            </div>
-                        </section>
-
-                        <section className="glass rounded-3xl p-8 border border-slate-800 space-y-6 shadow-xl">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
-                                <Calendar className="text-emerald-500" size={20} />
-                                Parâmetros de Cronograma
-                            </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <FormGroup label="Data Inicial" icon={<CalendarDays size={14} className="text-emerald-500" />}>
-                                    <div className="relative">
-                                        <button 
-                                            type="button"
-                                            onClick={() => setShowDatePicker(!showDatePicker)}
-                                            className="input-custom flex items-center justify-between group hover:border-emerald-500/30 transition-all"
-                                        >
-                                            <span className={formData.start_date ? 'text-white' : 'text-slate-500'}>
-                                                {formData.start_date ? new Date(formData.start_date + 'T00:00:00').toLocaleDateString('pt-BR') : 'Selecione a data'}
-                                            </span>
-                                            <Calendar size={16} className="text-slate-500 group-hover:text-emerald-400 transition-colors" />
-                                        </button>
-
-                                        {showDatePicker && (
-                                            <>
-                                                <div className="fixed inset-0 z-40" onClick={() => setShowDatePicker(false)}></div>
-                                                <div className="absolute top-full left-0 mt-3 w-[280px] glass rounded-3xl border border-slate-800 shadow-2xl z-50 p-4 animate-in fade-in zoom-in-95 duration-200 origin-top-left">
-                                                    <div className="flex items-center justify-between mb-4 px-1">
-                                                        <span className="text-[10px] font-black text-white uppercase tracking-tighter">
-                                                            {pickerMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                                                        </span>
-                                                        <div className="flex gap-1">
-                                                            <button 
-                                                                type="button" onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() - 1, 1))}
-                                                                className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white"
-                                                            >
-                                                                <ArrowLeft size={12} />
-                                                            </button>
-                                                            <button 
-                                                                type="button" onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 1))}
-                                                                className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white"
-                                                            >
-                                                                <ChevronRight size={12} />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                    
-                                                    <div className="grid grid-cols-7 mb-2">
-                                                        {['D','S','T','Q','Q','S','S'].map(d => (
-                                                            <div key={d} className="text-center text-[8px] font-black text-slate-600 py-1">{d}</div>
-                                                        ))}
-                                                    </div>
-
-                                                    <div className="grid grid-cols-7 gap-1">
-                                                        {(() => {
-                                                            const year = pickerMonth.getFullYear();
-                                                            const month = pickerMonth.getMonth();
-                                                            const daysInMonth = getDaysInMonth(year, month);
-                                                            const firstDay = getFirstDayOfMonth(year, month);
-                                                            const cells = [];
-
-                                                            for (let i = 0; i < firstDay; i++) {
-                                                                cells.push(<div key={`empty-${i}`} className="h-8"></div>);
-                                                            }
-
-                                                            for (let d = 1; d <= daysInMonth; d++) {
-                                                                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                                                                const isSelected = formData.start_date === dateStr;
-                                                                const holiday = holidays.find(h => h.date === dateStr);
-                                                                
-                                                                cells.push(
-                                                                    <button
-                                                                        key={d}
-                                                                        type="button"
-                                                                        onClick={() => {
-                                                                            setFormData({...formData, start_date: dateStr});
-                                                                            setShowDatePicker(false);
-                                                                        }}
-                                                                        className={`
-                                                                            h-8 rounded-xl flex items-center justify-center text-[10px] font-bold transition-all relative group/day
-                                                                            ${isSelected ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}
-                                                                            ${holiday ? 'text-rose-400' : ''}
-                                                                        `}
-                                                                    >
-                                                                        {d}
-                                                                        {holiday && (
-                                                                            <div className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50"></div>
-                                                                        )}
-                                                                        {holiday && (
-                                                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 border border-slate-800 rounded-lg text-[7px] text-white opacity-0 group-hover/day:opacity-100 transition-opacity whitespace-nowrap z-50 pointer-events-none">
-                                                                                {holiday.description}
-                                                                            </div>
-                                                                        )}
-                                                                    </button>
-                                                                );
-                                                            }
-                                                            return cells;
-                                                        })()}
-                                                    </div>
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-                                </FormGroup>
-
-                                <FormGroup label="Recorrência" icon={<ListIcon size={14} className="text-amber-500" />}>
-                                    <select
-                                        className="select-custom"
-                                        value={formData.recurrence}
-                                        onChange={(e) => {
-                                            const rec = e.target.value;
-                                            setFormData({ ...formData, recurrence: rec, num_classes: rec === 'na' ? 1 : formData.num_classes });
-                                        }}
-                                    >
-                                        <option value="semanal">Semanal</option>
-                                        <option value="quinzenal">Quinzenal</option>
-                                        <option value="na">Master Class (Evento Único)</option>
-                                    </select>
-                                </FormGroup>
-
-                                <FormGroup label="Carga Horária (Total)" icon={<Hash size={14} className="text-blue-500" />}>
-                                    <div className="relative group/input">
-                                        <input
-                                            type="number" className="input-custom"
-                                            value={formData.workload}
-                                            placeholder="Ex: 24"
-                                            onChange={(e) => setFormData({...formData, workload: parseInt(e.target.value)})}
-                                        />
-                                    </div>
-                                </FormGroup>
-
-                                {formData.recurrence !== 'na' && (
-                                    <FormGroup label="Quantidade de Aulas" icon={<Clock size={14} className="text-amber-400" />}>
-                                        <div className="relative group/input">
-                                            <input
-                                                type="number" className="input-custom"
-                                                value={formData.num_classes}
-                                                placeholder="Ex: 4"
-                                                onChange={(e) => setFormData({...formData, num_classes: parseInt(e.target.value)})}
-                                            />
-                                        </div>
-                                    </FormGroup>
-                                )}
-                            </div>
-                        </section>
-                    </div>
-
-                    <div className="space-y-6">
-                        <div className="glass rounded-3xl p-6 border border-slate-800 bg-gradient-to-br from-blue-600/5 to-transparent">
-                            <h4 className="font-bold text-white mb-4 flex items-center gap-2">
-                                <Info size={18} className="text-blue-400" />
-                                Inteligência Ponto Facultativo
-                            </h4>
-                            <p className="text-xs text-slate-400 leading-relaxed mb-4">
-                                O sistema alertará se aulas caírem próximas a feriados, permitindo prever emendas acadêmicas.
-                            </p>
-                            <ul className="space-y-3 text-[11px] text-slate-500 font-medium">
-                                <li className="flex gap-2"><div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 flex-shrink-0"></div> Detecção de feriados e recessos institucionais</li>
-                                <li className="flex gap-2"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0"></div> Sugestão automática de recalendário</li>
-                            </ul>
-                        </div>
-
-                        <button 
-                            onClick={() => setShowConfirmation(true)}
-                            className="w-full h-20 bg-blue-600 hover:bg-blue-700 text-white rounded-3xl font-black text-lg flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-2xl shadow-blue-500/30"
-                            disabled={loading}
-                        >
-                            CALCULAR CRONOGRAMA
-                            <ChevronRight />
-                        </button>
-                    </div>
-                </div>
-            )}
-
-                        {step === 2 && (
-                <div className="space-y-6 animate-in fade-in duration-500">
-                    <div className="flex items-center gap-4">
-                        <button onClick={() => setStep(1)} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all">
-                            <ArrowLeft size={20} />
-                        </button>
-                        <div>
-                            <h3 className="text-2xl font-bold text-white">Resolução de Conflitos</h3>
-                            <p className="text-slate-400 text-sm mt-1">Escolha como tratar cada data bloqueada antes de confirmar o cronograma.</p>
-                        </div>
-                    </div>
-                    <div className="space-y-4">
-                        {generatedResult.skipped.map((s: any) => {
-                            const r = resolutions[s.date];
-                            return (
-                                <div key={s.date} className="glass p-5 rounded-2xl border border-amber-500/20 space-y-4">
-                                    <div>
-                                        <p className="text-white font-semibold">
-                                            {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
-                                        </p>
-                                        <p className="text-amber-400 text-sm flex items-center gap-1 mt-1">
-                                            <AlertCircle size={14} />
-                                            {s.reason}
-                                        </p>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <button
-                                            onClick={() => setResolutions(prev => ({ ...prev, [s.date]: { action: 'auto', resolved_date: s.suggested_date } }))}
-                                            className={`p-3 rounded-xl border text-sm font-semibold transition-all ${r?.action === 'auto' ? 'bg-green-600/20 border-green-500/50 text-green-400' : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                                        >
-                                            <CheckCircle2 size={16} className="mx-auto mb-1" />
-                                            Ajuste Automático
-                                            {s.suggested_date && (
-                                                <p className="text-xs mt-1 font-normal opacity-80">
-                                                    → {new Date(s.suggested_date + 'T00:00:00').toLocaleDateString('pt-BR')}
-                                                </p>
-                                            )}
-                                        </button>
-                                        <div className={`p-3 rounded-xl border text-sm font-semibold transition-all ${r?.action === 'manual' ? 'bg-blue-600/20 border-blue-500/50 text-blue-400' : 'bg-slate-800/50 border-slate-700 text-slate-400'}`}>
-                                            <CalendarDays size={16} className="mx-auto mb-1" />
-                                            Ajuste Manual
-                                            <input
-                                                type="date"
-                                                className="mt-2 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                                value={r?.action === 'manual' ? r.resolved_date : ''}
-                                                onChange={(e) => {
-                                                    if (e.target.value) {
-                                                        setResolutions(prev => ({ ...prev, [s.date]: { action: 'manual', resolved_date: e.target.value } }));
-                                                    }
-                                                }}
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                    <button
-                        onClick={handleApplyResolutions}
-                        disabled={loading || generatedResult.skipped.some((s: any) => !resolutions[s.date]?.resolved_date)}
-                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-2"
-                    >
-                        {loading ? 'Processando...' : 'Aplicar Resoluções e Ver Cronograma'}
-                        <ChevronRight size={20} />
-                    </button>
-                </div>
-            )}
-
-            {step === 3 && (
-                <div className="space-y-8 animate-in fade-in duration-700">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div>
-                            <h2 className="text-3xl font-bold text-white tracking-tight">Estratégia de Datas</h2>
-                            <p className="text-slate-400">Verifique os feriados bloqueados e os alertas de emenda.</p>
-                        </div>
-                        <div className="flex gap-3">
-                             <div className="bg-slate-900 border border-slate-800 p-1 rounded-2xl flex gap-1">
-                                <button 
-                                    onClick={() => setViewMode('list')}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-xs font-bold ${viewMode === 'list' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
-                                >
-                                    <ListIcon size={14} /> Lista
-                                </button>
-                                <button 
-                                    onClick={() => setViewMode('calendar')}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-xs font-bold ${viewMode === 'calendar' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
-                                >
-                                    <CalendarDays size={14} /> Calendário
-                                </button>
-                            </div>
-                            <button
-                                onClick={handleExportPreview}
-                                className="flex items-center gap-2 bg-emerald-900/40 hover:bg-emerald-800/60 text-emerald-400 border border-emerald-800/50 px-6 py-3 rounded-2xl font-bold transition-all text-xs active:scale-95 uppercase tracking-tighter"
-                            >
-                                <Download size={16} /> .xlsx
-                            </button>
-                            <button
-                                onClick={() => setStep(1)}
-                                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-6 py-3 rounded-2xl font-bold transition-all text-xs border border-slate-700"
-                            >
-                                <ArrowLeft size={16} /> Ajustar
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        <div className="lg:col-span-2 space-y-4">
-                           {viewMode === 'list' ? (
-                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {generatedResult.dates.map((dateStr, idx) => {
-                                        const holiday = checkHolidayProximity(dateStr);
-                                        return (
-                                            <div key={idx} className={`glass rounded-2xl p-6 border ${holiday ? 'border-amber-500/40 bg-amber-500/5' : 'border-slate-800'} flex items-center gap-5 group hover:border-blue-500/40 transition-all relative overflow-hidden backdrop-blur-xl`}>
-                                                <div className="w-14 h-14 rounded-2xl bg-blue-600/10 flex flex-col items-center justify-center text-blue-400 font-black border border-blue-500/20">
-                                                    <span className="text-[10px] leading-none mb-1 opacity-50 uppercase">Aula</span>
-                                                    {idx + 1}
-                                                </div>
-                                                <div className="flex-1">
-                                                    <p className="text-[10px] uppercase font-bold text-slate-500 tracking-widest mb-1">
-                                                        {formData.recurrence === 'na' ? 'Master Class' : 'Encontro Confirmado'}
-                                                    </p>
-                                                    <h4 className="text-lg font-bold text-white capitalize">
-                                                        {new Date(dateStr + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-                                                    </h4>
-                                                    {holiday && (
-                                                        <div className="flex items-center gap-1.5 mt-2 text-amber-500 animate-pulse bg-amber-500/10 py-1 px-2 rounded-lg w-fit">
-                                                            <AlertCircle size={12} />
-                                                            <span className="text-[10px] font-black uppercase tracking-tight">Atenção: {holiday.description}</span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                           ) : (
-                               <div className="glass rounded-[40px] p-0 border border-slate-800 overflow-hidden shadow-2xl">
-                                   <div className="bg-slate-900/50 p-6 flex items-center justify-between border-b border-slate-800">
-                                       <h3 className="font-black text-white text-xl uppercase tracking-tighter">
-                                           {currentMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                                       </h3>
-                                       <div className="flex gap-2">
-                                           <button 
-                                                onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
-                                                className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white"
-                                            >
-                                                <ArrowLeft size={18} />
-                                            </button>
-                                           <button 
-                                                onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
-                                                className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white"
-                                            >
-                                                <ChevronRight size={18} />
-                                            </button>
-                                       </div>
-                                   </div>
-                                   
-                                   <div className="grid grid-cols-7 border-b border-slate-800/30">
-                                       {['DOM','SEG','TER','QUA','QUI','SEX','SAB'].map(d => (
-                                           <div key={d} className="py-4 text-center text-[10px] font-black text-slate-500 tracking-widest bg-slate-950/20">{d}</div>
-                                       ))}
-                                   </div>
-
-                                   <div className="grid grid-cols-7">
-                                       {renderCalendarGrid()}
-                                   </div>
-
-                                   <div className="p-6 bg-slate-950/40 grid grid-cols-2 md:grid-cols-4 gap-4">
-                                       <LegendItem color="bg-blue-600" label="Aula Confirmada" />
-                                       <LegendItem color="bg-red-500/20 border border-red-500/40" label="Feriado Bloqueado" />
-                                       <LegendItem color="bg-amber-500/20 border border-amber-500/40" label="Recesso/Limitação" />
-                                       <LegendItem color="text-amber-500 font-bold" icon={<AlertCircle size={14}/>} label="Ponto Facultativo" />
-                                   </div>
-                               </div>
-                           )}
-                        </div>
-
-                        <div className="space-y-6">
-                            <div className="glass rounded-3xl p-6 border border-slate-800 relative bg-gradient-to-br from-amber-500/5 to-transparent">
-                                <h4 className="font-bold text-white mb-6 flex items-center gap-2 uppercase tracking-wide text-xs">
-                                    <AlertCircle size={18} className="text-amber-400" />
-                                    Detecção de Conflitos
-                                </h4>
-                                {generatedResult.skipped.length > 0 ? (
-                                    <div className="space-y-3">
-                                        {generatedResult.skipped.map((s, i) => (
-                                            <div key={i} className="p-4 rounded-xl bg-slate-900/50 border border-amber-500/10 group hover:border-amber-500/30 transition-all">
-                                                <div className="flex gap-3 items-start">
-                                                    <div className="text-amber-500 pt-1 group-hover:scale-110 transition-transform flex-shrink-0"><AlertCircle size={14} /></div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-xs font-black text-amber-500 mb-0.5 uppercase tracking-tighter">
-                                                            {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
-                                                        </p>
-                                                        <p className="text-[10px] text-slate-500 font-medium leading-tight">{s.reason}</p>
-                                                        
-                                                        {s.suggested_date && (
-                                                            <div className="mt-2 p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/10 flex items-center justify-between animate-in fade-in slide-in-from-left-2 duration-300">
-                                                                <div className="flex items-center gap-2">
-                                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                                                                    <span className="text-[9px] font-bold text-emerald-500/80 uppercase tracking-tighter">Sugestão: {new Date(s.suggested_date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
-                                                                </div>
-                                                                <button 
-                                                                    onClick={() => applyOverride(s.date, s.suggested_date)}
-                                                                    className="text-[8px] font-black bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white px-2 py-1 rounded-md transition-all uppercase border border-emerald-500/20"
-                                                                >
-                                                                    Aceitar
-                                                                </button>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    <button
-                                                        onClick={() => {
-                                                            setActiveConflictPicker(activeConflictPicker === s.date ? null : s.date);
-                                                            setConflictPickerMonth(new Date(s.date + 'T00:00:00'));
-                                                        }}
-                                                        className="text-[9px] font-black text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 px-2 py-1 rounded-lg transition-all uppercase tracking-tight whitespace-nowrap flex-shrink-0"
-                                                    >
-                                                        Repor Manual
-                                                    </button>
-                                                </div>
-                                                {activeConflictPicker === s.date && (
-                                                    <div className="mt-3 glass rounded-2xl border border-slate-700 p-3 animate-in fade-in zoom-in-95 duration-200">
-                                                        <div className="flex items-center justify-between mb-2">
-                                                            <span className="text-[9px] font-black text-white uppercase tracking-tighter">
-                                                                {conflictPickerMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                                                            </span>
-                                                            <div className="flex gap-1">
-                                                                <button type="button" onClick={() => setConflictPickerMonth(new Date(conflictPickerMonth.getFullYear(), conflictPickerMonth.getMonth() - 1, 1))} className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white">
-                                                                    <ArrowLeft size={10} />
-                                                                </button>
-                                                                <button type="button" onClick={() => setConflictPickerMonth(new Date(conflictPickerMonth.getFullYear(), conflictPickerMonth.getMonth() + 1, 1))} className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white">
-                                                                    <ChevronRight size={10} />
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                        <div className="grid grid-cols-7 mb-1">
-                                                            {['D','S','T','Q','Q','S','S'].map((d, di) => (
-                                                                <div key={di} className="text-center text-[7px] font-black text-slate-600 py-0.5">{d}</div>
-                                                            ))}
-                                                        </div>
-                                                        <div className="grid grid-cols-7 gap-0.5">
-                                                            {(() => {
-                                                                const y = conflictPickerMonth.getFullYear();
-                                                                const m = conflictPickerMonth.getMonth();
-                                                                const days = getDaysInMonth(y, m);
-                                                                const first = getFirstDayOfMonth(y, m);
-                                                                const cells = [];
-                                                                for (let ei = 0; ei < first; ei++) cells.push(<div key={`e-${ei}`} className="h-7"></div>);
-                                                                for (let d = 1; d <= days; d++) {
-                                                                    const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                                                                    const isHol = holidays.find(h => h.date === ds);
-                                                                    const isSelected = conflictOverrides[s.date] === ds;
-                                                                    cells.push(
-                                                                        <button key={d} type="button"
-                                                                            onClick={() => !isHol && applyOverride(s.date, ds)}
-                                                                            disabled={!!isHol}
-                                                                            className={`h-7 rounded-lg flex items-center justify-center text-[9px] font-bold transition-all ${isSelected ? 'bg-blue-600 text-white' : isHol ? 'text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-                                                                        >{d}</button>
-                                                                    );
-                                                                }
-                                                                return cells;
-                                                            })()}
-                                                        </div>
-                                                        <p className="text-[8px] text-slate-600 mt-2 text-center">Datas em vermelho = feriados (bloqueadas)</p>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-8">
-                                        <p className="text-sm text-slate-600 italic">Nenhum conflito nas datas geradas.</p>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="glass p-8 rounded-3xl border border-slate-800 bg-emerald-500/5 shadow-2xl shadow-emerald-500/10">
-                                <div className="flex justify-between items-start mb-8">
-                                    <div>
-                                        <p className="text-[11px] text-emerald-400 font-black uppercase tracking-widest">Resumo Final</p>
-                                        <h3 className="text-2xl font-black text-white mt-1">Status: Pronto</h3>
-                                    </div>
-                                    <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
-                                        <CheckCircle2 size={24} />
-                                    </div>
-                                </div>
-                                <div className="space-y-4 mb-10 border-t border-slate-800 pt-6">
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-slate-500 font-medium tracking-tight">Carga Horária Planejada</span>
-                                        <span className="text-white font-black">{formData.workload}h</span>
-                                    </div>
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-slate-500 font-medium tracking-tight">Total de Encontros</span>
-                                        <span className="text-white font-black">{generatedResult.dates.length} Aulas</span>
-                                    </div>
-                                </div>
-                                <button 
-                                    onClick={handleFinalSave}
-                                    disabled={loading}
-                                    className="w-full h-20 bg-emerald-600 hover:bg-emerald-500 text-white rounded-[24px] font-black text-lg flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-2xl shadow-emerald-500/30 uppercase tracking-tighter"
-                                >
-                                    {loading ? 'MODULANDO...' : 'EFETIVAR CRONOGRAMA'}
-                                    <ChevronRight />
-                                </button>
-                                <p className="text-[10px] text-slate-500 text-center mt-6 font-medium leading-relaxed italic">
-                                    Ao clicar em efetivar, as datas serão persistidas e ficarão visíveis para os alunos no App Mobile.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {showRecalcModal && pendingOverride && (
-                <div className="fixed inset-0 bg-[#060a14]/95 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-in fade-in duration-300">
-                    <div className="glass max-w-md w-full p-10 rounded-[40px] border border-slate-800 shadow-2xl space-y-8 animate-in zoom-in-95 duration-300">
-                        <div className="text-center space-y-3">
-                            <div className="w-16 h-16 rounded-[24px] bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto mb-4 border border-amber-500/20">
-                                <AlertCircle size={32} />
-                            </div>
-                            <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Reposição Definida</h3>
-                            <p className="text-slate-400 text-sm">
-                                Data escolhida:{' '}
-                                <span className="text-white font-black">
-                                    {new Date(pendingOverride.overrideDate + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-                                </span>
-                            </p>
-                            <p className="text-slate-500 text-xs">Deseja recalcular todo o cronograma com base na configuração original?</p>
-                        </div>
-                        <div className="flex gap-4">
-                            <button
-                                onClick={confirmOverrideNoRecalc}
-                                className="flex-1 py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold transition-all border border-slate-800 text-xs uppercase tracking-tighter"
-                            >
-                                Não, apenas adicionar
-                            </button>
-                            <button
-                                onClick={confirmOverrideWithRecalc}
-                                className="flex-1 py-4 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black transition-all shadow-lg shadow-amber-500/20 text-xs uppercase tracking-tighter"
-                            >
-                                Sim, Recalcular
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {showConfirmation && (
-                <div className="fixed inset-0 bg-[#060a14]/95 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-in fade-in duration-300">
-                    <div className="glass max-w-lg w-full p-10 rounded-[40px] border border-slate-800 shadow-2xl space-y-8 animate-in zoom-in-95 duration-300">
-                        <div className="text-center space-y-2">
-                            <div className="w-20 h-20 rounded-[30px] bg-blue-600/10 text-blue-400 flex items-center justify-center mx-auto mb-6 border border-blue-500/20">
-                                <HelpCircle size={40} />
-                            </div>
-                            <h3 className="text-3xl font-black text-white tracking-tighter uppercase">Revisar Parâmetros</h3>
-                            <p className="text-slate-400 text-sm">Confirme se as regras estão corretas antes de gerar.</p>
-                        </div>
-                        
-                        <div className="glass rounded-[32px] p-8 border border-white/5 space-y-4 bg-slate-900/40">
-                            <ConfirmRow label="MBA / CURSO" value={getSelectionLabels().mba || '-'} />
-                            <ConfirmRow label="DISCIPLINA" value={getSelectionLabels().disc || '-'} />
-                            <div className="h-px bg-slate-800 my-4"></div>
-                            <ConfirmRow label="DATA INICIAL" value={formData.start_date ? new Date(formData.start_date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'} />
-                            <ConfirmRow label="MODALIDADE" value={formData.format} />
-                            <ConfirmRow label="QUANTIDADE" value={`${formData.num_classes} Encontros`} />
-                        </div>
-
-                        <div className="flex gap-4">
-                            <button 
-                                onClick={() => setShowConfirmation(false)}
-                                className="flex-1 py-5 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold transition-all border border-slate-800"
-                            >
-                                Ajustar
-                            </button>
-                            <button 
-                                onClick={handleGenerate}
-                                className="flex-1 py-5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black transition-all shadow-lg shadow-blue-500/20 uppercase tracking-tighter"
-                            >
-                                GERAR AGORA
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
+const getErrorMessage = (error: unknown) => {
+  const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ');
+  if (error instanceof Error) return error.message;
+  return 'Erro inesperado';
 };
 
-const FormGroup = ({ label, children, icon }: any) => (
-  <div className="space-y-2.5">
-    <div className="flex items-center gap-2 ml-1">
-        {icon}
-        <label className="text-[10px] uppercase font-black text-slate-500 tracking-widest">{label}</label>
+const classHours = (start: string, end: string): number => {
+  if (!start || !end) return 0;
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+  return Math.max(0, (eh * 60 + em - (sh * 60 + sm)) / 60);
+};
+
+const ScheduleForm = () => {
+  const { configId } = useParams<{ configId?: string }>();
+  const navigate = useNavigate();
+  const isEditing = !!configId;
+
+  const [loading, setLoading] = useState(false);
+  const [loadingConfig, setLoadingConfig] = useState(isEditing);
+  const [step, setStep] = useState(1);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [modules, setModules] = useState<Module[]>([]);
+  const [disciplines, setDisciplines] = useState<Discipline[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [result, setResult] = useState<GenerateResponse>({ dates: [], skipped: [], num_classes: 0, total_workload: 0 });
+  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('calendar');
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [resolutions, setResolutions] = useState<Record<string, { action: 'auto' | 'manual'; resolved_date: string }>>({});
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+
+  const [formData, setFormData] = useState<FormData>({
+    course_id: 0,
+    module_id: 0,
+    discipline_id: 0,
+    format: 'presencial',
+    start_date: '',
+    end_date: '',
+    recurrence: 'semanal',
+    days_of_week: [1],
+    start_time: '19:00',
+    end_time: '22:00',
+    holiday_policy: 'reschedule',
+  });
+
+  useEffect(() => {
+    api.get<Course[]>(`/courses/`).then((r) => setCourses(r.data)).catch(() => {});
+    api.get<Holiday[]>(`/holidays/`).then((r) => setHolidays(r.data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!configId) return;
+    const loadForEdit = async () => {
+      setLoadingConfig(true);
+      try {
+        const { data: cfg } = await api.get<ScheduleConfigRead>(`/schedules/${configId}`);
+        const [modRes, discRes] = await Promise.all([
+          api.get<Module[]>(`/courses/${cfg.course_id}/modules`),
+          api.get<Discipline[]>(`/modules/${cfg.module_id}/disciplines`),
+        ]);
+        setModules(modRes.data);
+        setDisciplines(discRes.data);
+        setFormData({
+          course_id: cfg.course_id,
+          module_id: cfg.module_id,
+          discipline_id: cfg.discipline_id,
+          format: cfg.format === 'remoto' ? 'remoto' : 'presencial',
+          start_date: cfg.start_date,
+          end_date: cfg.end_date || '',
+          recurrence: cfg.recurrence,
+          days_of_week: cfg.days_of_week.length ? cfg.days_of_week : [1],
+          start_time: cfg.start_time ? cfg.start_time.slice(0, 5) : '19:00',
+          end_time: cfg.end_time ? cfg.end_time.slice(0, 5) : '22:00',
+          holiday_policy: cfg.holiday_policy,
+        });
+      } catch (err) {
+        alert('Erro ao carregar cronograma para edição: ' + getErrorMessage(err));
+        navigate('/schedules');
+      } finally {
+        setLoadingConfig(false);
+      }
+    };
+    loadForEdit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configId]);
+
+  const fetchModules = async (courseId: number) => {
+    try {
+      const res = await api.get<Module[]>(`/courses/${courseId}/modules`);
+      setModules(res.data);
+      setDisciplines([]);
+      setFormData((p) => ({ ...p, module_id: 0, discipline_id: 0 }));
+    } catch { /* ignore */ }
+  };
+
+  const fetchDisciplines = async (moduleId: number) => {
+    try {
+      const res = await api.get<Discipline[]>(`/modules/${moduleId}/disciplines`);
+      setDisciplines(res.data);
+      setFormData((p) => ({ ...p, discipline_id: 0 }));
+    } catch { /* ignore */ }
+  };
+
+  const toggleDay = (day: number) => {
+    setFormData((p) => ({
+      ...p,
+      days_of_week: p.days_of_week.includes(day) ? p.days_of_week.filter((d) => d !== day) : [...p.days_of_week, day].sort((a, b) => a - b),
+    }));
+  };
+
+  const buildConfig = () => ({
+    course_id: formData.course_id,
+    module_id: formData.module_id,
+    discipline_id: formData.discipline_id,
+    format: formData.format,
+    start_date: formData.start_date,
+    end_date: formData.recurrence === 'na' ? null : formData.end_date,
+    recurrence: formData.recurrence,
+    days_of_week: formData.recurrence === 'na' ? [] : formData.days_of_week,
+    start_time: formData.start_time,
+    end_time: formData.end_time,
+    holiday_policy: formData.holiday_policy,
+  });
+
+  const validate = (): string | null => {
+    if (!formData.discipline_id) return 'Selecione a disciplina.';
+    if (!formData.start_date) return 'Informe a data de início.';
+    if (formData.recurrence !== 'na') {
+      if (!formData.end_date) return 'Informe a data de fim.';
+      if (formData.end_date < formData.start_date) return 'A data de fim deve ser posterior à de início.';
+      if (formData.days_of_week.length === 0) return 'Selecione ao menos um dia da semana.';
+    }
+    if (classHours(formData.start_time, formData.end_time) <= 0) return 'O horário de término deve ser posterior ao de início.';
+    return null;
+  };
+
+  const handleGenerate = async () => {
+    const error = validate();
+    if (error) { alert(error); return; }
+    setLoading(true);
+    try {
+      const res = await api.post<GenerateResponse>(`/generate-schedule/`, buildConfig());
+      setResult(res.data);
+      if (res.data.dates.length > 0) setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
+
+      if (formData.holiday_policy !== 'skip' && res.data.skipped.length > 0) {
+        const initial: Record<string, { action: 'auto' | 'manual'; resolved_date: string }> = {};
+        if (formData.holiday_policy === 'reschedule') {
+          // Automático: pré-aceita a sugestão do sistema para cada conflito
+          for (const s of res.data.skipped) if (s.suggested_date) initial[s.date] = { action: 'auto', resolved_date: s.suggested_date };
+        }
+        // Manual: nada é pré-preenchido — o professor escolhe cada data
+        setResolutions(initial);
+        setStep(2);
+      } else {
+        setStep(3);
+      }
+    } catch (err) {
+      alert('Erro ao gerar: ' + getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const canApplyResolutions = result.skipped.every((s) => !!resolutions[s.date]?.resolved_date);
+
+  const handleApplyResolutions = async () => {
+    if (!canApplyResolutions) { alert('Escolha uma data de reposição para todas as aulas em conflito.'); return; }
+    setLoading(true);
+    try {
+      const resolutionList = result.skipped.map((s) => {
+        const r = resolutions[s.date];
+        return { original_date: s.date, action: r?.action ?? 'manual', resolved_date: r?.resolved_date ?? s.date };
+      });
+      const res = await api.post<GenerateResponse>(`/schedules/resolve-conflicts/`, { config: buildConfig(), resolutions: resolutionList });
+      setResult({ dates: res.data.dates, skipped: [], num_classes: res.data.num_classes, total_workload: res.data.total_workload });
+      if (res.data.dates.length > 0) setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
+      setStep(3);
+    } catch (err) {
+      alert('Erro ao aplicar resoluções: ' + getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFinalSave = async () => {
+    setLoading(true);
+    try {
+      const payload = {
+        config: buildConfig(),
+        classes: result.dates.map((d, i) => ({ date: d, order: i + 1 })),
+      };
+      if (isEditing) {
+        await api.put(`/schedules/${configId}`, payload);
+        alert('Cronograma regenerado com sucesso!');
+      } else {
+        await api.post(`/schedules/`, payload);
+        alert('Cronograma salvo com sucesso!');
+      }
+      setShowSaveConfirm(false);
+      navigate('/schedules');
+    } catch (err) {
+      alert('Erro ao salvar cronograma: ' + getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExportPreview = async () => {
+    try {
+      const course = courses.find((c) => c.id === formData.course_id);
+      const res = await api.post(`/schedules/export-preview/xlsx`, {
+        course_name: course?.name || 'Curso',
+        module_name: modules.find((m) => m.id === formData.module_id)?.name || 'Módulo',
+        discipline_name: disciplines.find((d) => d.id === formData.discipline_id)?.name || 'Disciplina',
+        format: formData.format,
+        dates: result.dates,
+        recurrence: formData.recurrence,
+        institution: course?.institution ?? null,
+        academic_level: course?.academic_level ?? null,
+        semester: course?.semester ?? null,
+        start_time: formData.start_time,
+        end_time: formData.end_time,
+        workload: result.total_workload,
+      }, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'cronograma_preview.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      alert('Erro ao exportar cronograma.');
+    }
+  };
+
+  const perClass = classHours(formData.start_time, formData.end_time);
+
+  if (loadingConfig) {
+    return <div className="flex items-center justify-center h-96 text-muted animate-pulse">Carregando cronograma...</div>;
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6">
+      <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-muted hover:text-ink transition-colors w-fit text-sm">
+        <ArrowLeft size={18} /> Voltar
+      </button>
+
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-ink tracking-tight">{isEditing ? 'Editar cronograma' : 'Gerar cronograma'}</h2>
+          <p className="text-muted mt-1 text-sm">
+            {isEditing ? 'Ajuste os parâmetros e regenere as datas do cronograma.' : 'Defina a disciplina, o período e a recorrência das aulas.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {[1, 2, 3].map((n) => (
+            <div key={n} className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-semibold ${step === n ? 'bg-accent text-accent-fg' : 'bg-surface-2 text-muted border border-line'}`}>{n}</div>
+          ))}
+        </div>
+      </div>
+
+      {step === 1 && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            <section className="card p-6 space-y-4">
+              <h3 className="text-base font-semibold text-ink flex items-center gap-2"><BookOpen size={18} className="text-accent" /> Estrutura acadêmica</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Curso" icon={<GraduationCap size={13} />}>
+                  <select className="select-custom" value={formData.course_id}
+                    onChange={(e) => { const v = parseInt(e.target.value); setFormData({ ...formData, course_id: v }); if (v) fetchModules(v); }}>
+                    <option value={0}>Selecione o curso</option>
+                    {courses.map((c) => <option key={c.id} value={c.id}>{c.name}{c.institution ? ` — ${c.institution}` : ''}</option>)}
+                  </select>
+                </Field>
+                <Field label="Módulo" icon={<BookOpen size={13} />}>
+                  <select disabled={!formData.course_id} className="select-custom" value={formData.module_id}
+                    onChange={(e) => { const v = parseInt(e.target.value); setFormData({ ...formData, module_id: v }); if (v) fetchDisciplines(v); }}>
+                    <option value={0}>Selecione o módulo</option>
+                    {modules.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Disciplina" icon={<CheckCircle2 size={13} />}>
+                  <select disabled={!formData.module_id} className="select-custom" value={formData.discipline_id}
+                    onChange={(e) => setFormData({ ...formData, discipline_id: parseInt(e.target.value) })}>
+                    <option value={0}>Selecione a disciplina</option>
+                    {disciplines.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Formato" icon={<Calendar size={13} />}>
+                  <select className="select-custom" value={formData.format}
+                    onChange={(e) => setFormData({ ...formData, format: e.target.value as 'presencial' | 'remoto' })}>
+                    <option value="presencial">Presencial</option>
+                    <option value="remoto">Remoto / Online</option>
+                  </select>
+                </Field>
+              </div>
+            </section>
+
+            <section className="card p-6 space-y-4">
+              <h3 className="text-base font-semibold text-ink flex items-center gap-2"><CalendarDays size={18} className="text-accent" /> Período e recorrência</h3>
+
+              <Field label="Recorrência" icon={<ListIcon size={13} />}>
+                <select className="select-custom" value={formData.recurrence}
+                  onChange={(e) => setFormData({ ...formData, recurrence: e.target.value as Recurrence })}>
+                  <option value="semanal">Semanal</option>
+                  <option value="quinzenal">Quinzenal</option>
+                  <option value="na">Evento único (masterclass)</option>
+                </select>
+              </Field>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Data de início" icon={<Calendar size={13} />}>
+                  <input type="date" className="input-custom" value={formData.start_date}
+                    onChange={(e) => setFormData({ ...formData, start_date: e.target.value })} />
+                </Field>
+                {formData.recurrence !== 'na' && (
+                  <Field label="Data de fim" icon={<Calendar size={13} />}>
+                    <input type="date" className="input-custom" value={formData.end_date} min={formData.start_date}
+                      onChange={(e) => setFormData({ ...formData, end_date: e.target.value })} />
+                  </Field>
+                )}
+              </div>
+
+              {formData.recurrence !== 'na' && (
+                <Field label="Dias da semana">
+                  <div className="flex flex-wrap gap-2">
+                    {WEEKDAYS.map((d) => {
+                      const active = formData.days_of_week.includes(d.value);
+                      return (
+                        <button key={d.value} type="button" onClick={() => toggleDay(d.value)}
+                          className={`px-3 h-10 rounded-lg text-sm font-medium border transition-colors ${active ? 'bg-accent text-accent-fg border-accent' : 'bg-surface-2 text-muted border-line hover:text-ink'}`}>
+                          {d.short}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Horário de início" icon={<Clock size={13} />}>
+                  <input type="time" className="input-custom" value={formData.start_time}
+                    onChange={(e) => setFormData({ ...formData, start_time: e.target.value })} />
+                </Field>
+                <Field label="Horário de término" icon={<Clock size={13} />}>
+                  <input type="time" className="input-custom" value={formData.end_time}
+                    onChange={(e) => setFormData({ ...formData, end_time: e.target.value })} />
+                </Field>
+              </div>
+
+              <Field label="Ao coincidir com feriado ou recesso">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <PolicyOption
+                    active={formData.holiday_policy === 'reschedule'}
+                    onClick={() => setFormData({ ...formData, holiday_policy: 'reschedule' })}
+                    icon={<RefreshCw size={16} />}
+                    title="Remarcar automaticamente"
+                    desc="O sistema sugere a reposição"
+                  />
+                  <PolicyOption
+                    active={formData.holiday_policy === 'manual'}
+                    onClick={() => setFormData({ ...formData, holiday_policy: 'manual' })}
+                    icon={<CalendarDays size={16} />}
+                    title="Remarcar manualmente"
+                    desc="Você escolhe a data de reposição"
+                  />
+                  <PolicyOption
+                    active={formData.holiday_policy === 'skip'}
+                    onClick={() => setFormData({ ...formData, holiday_policy: 'skip' })}
+                    icon={<XCircle size={16} />}
+                    title="Não remarcar"
+                    desc="Perde o dia; recalcula o total"
+                  />
+                </div>
+              </Field>
+            </section>
+          </div>
+
+          <div className="space-y-4">
+            <div className="card p-5 space-y-3">
+              <h4 className="font-medium text-ink text-sm">Resumo da configuração</h4>
+              <SummaryRow label="Recorrência" value={formData.recurrence === 'na' ? 'Evento único' : formData.recurrence} />
+              {formData.recurrence !== 'na' && (
+                <SummaryRow label="Dias" value={formData.days_of_week.map((d) => WEEKDAYS[d].short).join(', ') || '—'} />
+              )}
+              <SummaryRow label="Duração/aula" value={perClass > 0 ? `${perClass}h` : '—'} />
+              <SummaryRow label="Política" value={
+                formData.holiday_policy === 'skip' ? 'Não remarcar' :
+                formData.holiday_policy === 'manual' ? 'Remarcar manualmente' : 'Remarcar automaticamente'
+              } />
+              <p className="text-xs text-muted pt-2 border-t border-line">
+                A quantidade de aulas e a carga horária total são calculadas a partir do período informado.
+              </p>
+            </div>
+
+            <button onClick={handleGenerate} disabled={loading} className="btn-primary w-full h-14 text-base">
+              {loading ? 'Calculando...' : isEditing ? 'Recalcular cronograma' : 'Calcular cronograma'}<ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div className="space-y-5">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setStep(1)} className="btn-ghost h-10 w-10 p-0"><ArrowLeft size={18} /></button>
+            <div>
+              <h3 className="text-xl font-semibold text-ink">Resolução de conflitos</h3>
+              <p className="text-muted text-sm">
+                {formData.holiday_policy === 'manual'
+                  ? 'Escolha manualmente a data de reposição para cada aula.'
+                  : 'Confira as reposições sugeridas ou ajuste manualmente.'}
+              </p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {result.skipped.map((s) => {
+              const r = resolutions[s.date];
+              return (
+                <div key={s.date} className="card p-4 border-warn/30 space-y-3">
+                  <div>
+                    <p className="text-ink font-medium capitalize">
+                      {new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                    </p>
+                    <p className="text-warn text-sm flex items-center gap-1 mt-0.5"><AlertCircle size={14} /> {s.reason}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" disabled={!s.suggested_date}
+                      onClick={() => s.suggested_date && setResolutions((p) => ({ ...p, [s.date]: { action: 'auto', resolved_date: s.suggested_date! } }))}
+                      className={`p-3 rounded-lg border text-sm font-medium text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${r?.action === 'auto' ? 'bg-ok/10 border-ok/40 text-ok' : 'bg-surface-2 border-line text-muted hover:text-ink'}`}>
+                      <CheckCircle2 size={15} className="mb-1" /> Reposição automática
+                      {s.suggested_date ? (
+                        <p className="text-xs mt-1 opacity-80">→ {new Date(s.suggested_date + 'T00:00:00').toLocaleDateString('pt-BR')}</p>
+                      ) : (
+                        <p className="text-xs mt-1 opacity-80">Sem sugestão disponível</p>
+                      )}
+                    </button>
+                    <div className={`p-3 rounded-lg border text-sm font-medium transition-colors ${r?.action === 'manual' ? 'bg-accent/10 border-accent/40 text-accent' : 'bg-surface-2 border-line text-muted'}`}>
+                      <CalendarDays size={15} className="mb-1" /> Data manual
+                      <input type="date" className="mt-2 w-full bg-surface border border-line rounded px-2 py-1 text-xs text-ink"
+                        value={r?.action === 'manual' ? r.resolved_date : ''}
+                        onChange={(e) => e.target.value && setResolutions((p) => ({ ...p, [s.date]: { action: 'manual', resolved_date: e.target.value } }))} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={handleApplyResolutions} disabled={loading || !canApplyResolutions} className="btn-primary w-full h-12">
+            {loading ? 'Processando...' : 'Aplicar e ver cronograma'}<ChevronRight size={18} />
+          </button>
+          {!canApplyResolutions && (
+            <p className="text-xs text-warn text-center -mt-2">Escolha uma data de reposição para todas as aulas em conflito.</p>
+          )}
+        </div>
+      )}
+
+      {step === 3 && (
+        <div className="space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-xl font-semibold text-ink">Cronograma gerado</h3>
+              <p className="text-muted text-sm">Revise as datas antes de salvar.</p>
+            </div>
+            <div className="flex gap-2">
+              <div className="flex bg-surface-2 p-1 border border-line rounded-xl">
+                {(['calendar', 'list'] as const).map((m) => (
+                  <button key={m} onClick={() => setViewMode(m)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${viewMode === m ? 'bg-accent text-accent-fg' : 'text-muted hover:text-ink'}`}>
+                    {m === 'list' ? <ListIcon size={15} /> : <CalendarDays size={15} />}
+                  </button>
+                ))}
+              </div>
+              <button onClick={handleExportPreview} className="btn-ghost"><Download size={16} /> .xlsx</button>
+              <button onClick={() => setStep(1)} className="btn-ghost"><ArrowLeft size={16} /> Ajustar</button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              {viewMode === 'list' ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {result.dates.map((dateStr, idx) => (
+                    <div key={idx} className="card p-4 flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-accent/10 flex flex-col items-center justify-center text-accent shrink-0">
+                        <span className="text-[9px] uppercase opacity-70">Aula</span>
+                        <span className="font-semibold">{idx + 1}</span>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase text-muted tracking-wide">{formData.recurrence === 'na' ? 'Masterclass' : 'Encontro'}</p>
+                        <h4 className="text-ink font-medium capitalize">
+                          {new Date(dateStr + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long' })}
+                        </h4>
+                        <p className="text-xs text-muted">{formData.start_time} – {formData.end_time}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <PreviewCalendar
+                  currentMonth={currentMonth}
+                  dates={result.dates}
+                  holidays={holidays}
+                  isNa={formData.recurrence === 'na'}
+                  onPrev={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                  onNext={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                />
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {result.skipped.length > 0 && (
+                <div className="card p-5">
+                  <h4 className="font-medium text-ink text-sm mb-3 flex items-center gap-2">
+                    <AlertCircle size={16} className="text-warn" /> {formData.holiday_policy === 'skip' ? 'Aulas perdidas' : 'Conflitos'}
+                  </h4>
+                  <div className="space-y-2">
+                    {result.skipped.map((s, i) => (
+                      <div key={i} className="p-3 rounded-lg bg-surface-2 border border-line">
+                        <p className="text-sm font-medium text-warn">{new Date(s.date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</p>
+                        <p className="text-xs text-muted">{s.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="card p-5">
+                <p className="text-xs uppercase text-muted tracking-wide">Resumo</p>
+                <div className="space-y-2 my-4">
+                  <SummaryRow label="Total de aulas" value={`${result.dates.length}`} strong />
+                  <SummaryRow label="Carga horária total" value={`${result.total_workload}h`} strong />
+                  {formData.holiday_policy === 'skip' && result.skipped.length > 0 && (
+                    <SummaryRow label="Aulas perdidas" value={`${result.skipped.length}`} />
+                  )}
+                </div>
+                <button onClick={() => setShowSaveConfirm(true)} disabled={loading || result.dates.length === 0} className="btn-primary w-full h-12">
+                  Revisar e confirmar<CheckCircle2 size={18} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaveConfirm && (
+        <SaveConfirmModal
+          courseName={courses.find((c) => c.id === formData.course_id)?.name}
+          disciplineName={disciplines.find((d) => d.id === formData.discipline_id)?.name}
+          format={formData.format}
+          dates={result.dates}
+          startTime={formData.start_time}
+          endTime={formData.end_time}
+          totalWorkload={result.total_workload}
+          loading={loading}
+          isEditing={isEditing}
+          onCancel={() => setShowSaveConfirm(false)}
+          onConfirm={handleFinalSave}
+        />
+      )}
     </div>
+  );
+};
+
+const Field = ({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) => (
+  <div className="space-y-1.5">
+    <label className="text-xs font-medium text-muted flex items-center gap-1.5">{icon}{label}</label>
     {children}
   </div>
 );
 
-const ConfirmRow = ({ label, value }: { label: string, value: any }) => (
-    <div className="flex justify-between items-center text-xs">
-        <span className="text-slate-500 font-bold tracking-widest">{label}</span>
-        <span className="text-white font-black text-right ml-4 uppercase tracking-tighter">{value}</span>
-    </div>
+const SummaryRow = ({ label, value, strong }: { label: string; value: string; strong?: boolean }) => (
+  <div className="flex justify-between items-center text-sm">
+    <span className="text-muted">{label}</span>
+    <span className={strong ? 'text-ink font-semibold' : 'text-ink'}>{value}</span>
+  </div>
 );
 
-const LegendItem = ({ color, label, icon }: any) => (
-    <div className="flex items-center gap-2">
-        {icon ? icon : <div className={`w-3 h-3 rounded-full ${color}`}></div>}
-        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">{label}</span>
+const PolicyOption = ({ active, onClick, icon, title, desc }: { active: boolean; onClick: () => void; icon: ReactNode; title: string; desc: string }) => (
+  <button type="button" onClick={onClick}
+    className={`p-3 rounded-lg border text-left transition-colors ${active ? 'bg-accent/10 border-accent/40' : 'bg-surface-2 border-line hover:border-muted/40'}`}>
+    <div className={`flex items-center gap-2 font-medium text-sm ${active ? 'text-accent' : 'text-ink'}`}>{icon}{title}</div>
+    <p className="text-xs text-muted mt-1">{desc}</p>
+  </button>
+);
+
+interface PreviewCalendarProps {
+  currentMonth: Date;
+  dates: string[];
+  holidays: Holiday[];
+  isNa: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+}
+
+const PreviewCalendar = ({ currentMonth, dates, holidays, isNa, onPrev, onNext }: PreviewCalendarProps) => {
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDay = new Date(year, month, 1).getDay();
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="p-4 flex items-center justify-between border-b border-line bg-surface-2">
+        <h3 className="font-semibold text-ink capitalize">{currentMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>
+        <div className="flex gap-2">
+          <button onClick={onPrev} className="w-8 h-8 rounded-lg border border-line bg-surface text-muted hover:text-ink flex items-center justify-center"><ArrowLeft size={16} /></button>
+          <button onClick={onNext} className="w-8 h-8 rounded-lg border border-line bg-surface text-muted hover:text-ink flex items-center justify-center"><ChevronRight size={16} /></button>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 border-b border-line">
+        {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d) => (
+          <div key={d} className="py-3 text-center text-xs font-medium text-muted">{d}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7">
+        {Array.from({ length: firstDay }).map((_, i) => <div key={`e-${i}`} className="min-h-[7rem] border-r border-b border-line" />)}
+        {Array.from({ length: daysInMonth }).map((_, i) => {
+          const d = i + 1;
+          const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          const classIndex = dates.indexOf(dateStr);
+          const isClass = classIndex !== -1;
+          const holiday = holidays.find((h) => h.date === dateStr);
+          return (
+            <div key={d} className="min-h-[7rem] border-r border-b border-line p-2 flex flex-col">
+              <span className={`text-sm font-medium ${holiday ? 'text-danger' : 'text-muted'}`}>{d}</span>
+              {isClass && (
+                <div className="mt-1.5 bg-accent text-accent-fg rounded-md p-2 flex-1 flex flex-col justify-center items-center text-center gap-0.5">
+                  {isNa ? <Star size={16} /> : <CheckCircle2 size={16} />}
+                  <span className="text-sm font-bold leading-tight">{isNa ? 'Masterclass' : `Aula ${classIndex + 1}`}</span>
+                </div>
+              )}
+              {holiday && !isClass && (
+                <div className="mt-1.5 bg-danger/10 border border-danger/20 text-danger text-[11px] font-medium py-1.5 px-2 rounded-md leading-snug" title={holiday.description}>
+                  {holiday.description}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
+  );
+};
+
+interface SaveConfirmModalProps {
+  courseName?: string;
+  disciplineName?: string;
+  format: string;
+  dates: string[];
+  startTime: string;
+  endTime: string;
+  totalWorkload: number;
+  loading: boolean;
+  isEditing: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+const SaveConfirmModal = ({ courseName, disciplineName, format, dates, startTime, endTime, totalWorkload, loading, isEditing, onCancel, onConfirm }: SaveConfirmModalProps) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-sm">
+    <div className="card w-full max-w-lg p-6 shadow-2xl max-h-[85vh] flex flex-col">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="w-10 h-10 rounded-lg bg-accent/10 text-accent flex items-center justify-center shrink-0"><CheckCircle2 size={20} /></div>
+        <div>
+          <h3 className="text-lg font-semibold text-ink">{isEditing ? 'Confirmar regeneração' : 'Confirmar cronograma'}</h3>
+          <p className="text-sm text-muted mt-0.5">
+            {isEditing
+              ? 'As aulas atuais deste cronograma serão substituídas pelas novas datas abaixo.'
+              : 'Revise como as aulas ficarão antes de salvar definitivamente.'}
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-1 mb-4 text-sm">
+        <SummaryRow label="Disciplina" value={disciplineName || '—'} strong />
+        <SummaryRow label="Curso" value={courseName || '—'} />
+        <SummaryRow label="Formato" value={format === 'presencial' ? 'Presencial' : 'Remoto / Online'} />
+        <SummaryRow label="Horário" value={`${startTime} – ${endTime}`} />
+        <SummaryRow label="Total de aulas" value={`${dates.length}`} strong />
+        <SummaryRow label="Carga horária total" value={`${totalWorkload}h`} strong />
+      </div>
+
+      <p className="text-xs font-medium text-muted uppercase tracking-wide mb-2">Datas confirmadas</p>
+      <div className="flex-1 overflow-y-auto custom-scrollbar border border-line rounded-lg divide-y divide-line">
+        {dates.map((d, i) => (
+          <div key={d} className="flex items-center justify-between px-3 py-2 text-sm">
+            <span className="text-muted">Aula {i + 1}</span>
+            <span className="text-ink capitalize">{new Date(d + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long', year: 'numeric' })}</span>
+          </div>
+        ))}
+        {dates.length === 0 && <p className="text-sm text-muted p-3">Nenhuma aula gerada.</p>}
+      </div>
+
+      <div className="flex gap-3 mt-5">
+        <button onClick={onCancel} disabled={loading} className="btn-ghost flex-1 h-11">Voltar e ajustar</button>
+        <button onClick={onConfirm} disabled={loading || dates.length === 0} className="btn-primary flex-1 h-11">
+          {loading ? 'Salvando...' : isEditing ? 'Confirmar e regenerar' : 'Confirmar e salvar'}
+        </button>
+      </div>
+    </div>
+  </div>
 );
 
 export default ScheduleForm;

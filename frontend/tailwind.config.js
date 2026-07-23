@@ -8,28 +8,24 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#ffffff',
-        foreground: '#171717',
-        primary: {
-          DEFAULT: '#000000',
-          foreground: '#ffffff',
-        },
-        secondary: {
-          DEFAULT: '#f4f4f5',
-          foreground: '#18181b',
-        },
+        bg: 'rgb(var(--bg) / <alpha-value>)',
+        surface: 'rgb(var(--surface) / <alpha-value>)',
+        'surface-2': 'rgb(var(--surface-2) / <alpha-value>)',
+        line: 'rgb(var(--line) / <alpha-value>)',
+        ink: 'rgb(var(--ink) / <alpha-value>)',
+        muted: 'rgb(var(--muted) / <alpha-value>)',
+        faint: 'rgb(var(--faint) / <alpha-value>)',
         accent: {
-          DEFAULT: '#f4f4f5',
-          foreground: '#18181b',
+          DEFAULT: 'rgb(var(--accent) / <alpha-value>)',
+          fg: 'rgb(var(--accent-fg) / <alpha-value>)',
         },
+        danger: 'rgb(var(--danger) / <alpha-value>)',
+        warn: 'rgb(var(--warn) / <alpha-value>)',
+        ok: 'rgb(var(--ok) / <alpha-value>)',
       },
-      borderRadius: {
-        'xl': '0.75rem',
-        '2xl': '1rem',
+      fontFamily: {
+        sans: ['system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
       },
-      boxShadow: {
-        'premium': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-      }
     },
   },
   plugins: [],

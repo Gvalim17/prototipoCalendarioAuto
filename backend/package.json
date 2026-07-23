@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "migrate": ".venv/bin/alembic upgrade head",
     "test": ".venv/bin/pytest tests/ -v"
   }
 }

@@ -1,6 +1,8 @@
-import React from 'react';
-import { LayoutDashboard, Calendar, Settings, Info, Menu, GraduationCap, Coffee } from 'lucide-react';
+import React, { ReactNode } from 'react';
+import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
+import { useTheme } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -8,64 +10,47 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
+  const { theme, toggle } = useTheme();
+  const { user, logout } = useAuth();
+  const initials = user?.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'CA';
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-200 flex">
+    <div className="min-h-screen bg-bg text-ink flex">
       {/* Sidebar */}
-      <aside className="w-64 glass border-r border-slate-800 flex flex-col hidden md:flex">
+      <aside className="w-64 bg-surface border-r border-line flex-col hidden md:flex">
         <div className="p-6">
           <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-              <Calendar className="text-white" size={24} />
+            <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center">
+              <Calendar className="text-accent-fg" size={22} />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-white">MBA <span className="text-blue-500">Calendário</span></h1>
-              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Gestão Inteligente</p>
+              <h1 className="text-base font-semibold tracking-tight text-ink leading-tight">
+                Calendário Acadêmico
+              </h1>
+              <p className="text-[10px] uppercase tracking-widest text-muted font-medium">Gestão de Cronogramas</p>
             </div>
           </Link>
         </div>
 
-        <nav className="flex-1 px-4 space-y-2 mt-4">
-          <NavItem 
-            to="/" 
-            icon={<LayoutDashboard size={20} />} 
-            label="Dashboard" 
-            active={location.pathname === '/'} 
-          />
-          <NavItem 
-            to="/mbas" 
-            icon={<GraduationCap size={20} />} 
-            label="Gestão de MBAs" 
-            active={location.pathname.startsWith('/mbas')} 
-          />
-          <NavItem 
-            to="/holidays" 
-            icon={<Coffee size={20} />} 
-            label="Feriados & Recessos" 
-            active={location.pathname === '/holidays'} 
-          />
-          <NavItem 
-            to="/generate" 
-            icon={<Calendar size={20} />} 
-            label="Gerar Cronograma" 
-            active={location.pathname === '/generate'} 
-          />
-          <NavItem 
-            to="/settings" 
-            icon={<Settings size={20} />} 
-            label="Configurações" 
-            active={location.pathname === '/settings'} 
-          />
+        <nav className="flex-1 px-3 space-y-1 mt-2">
+          <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Painel" active={location.pathname === '/'} />
+          <NavItem to="/courses" icon={<GraduationCap size={18} />} label="Cursos" active={location.pathname.startsWith('/courses') || location.pathname.startsWith('/mbas')} />
+          <NavItem to="/generate" icon={<Calendar size={18} />} label="Gerar Cronogramas" active={location.pathname.startsWith('/generate')} />
+          <NavItem to="/schedules" icon={<CalendarDays size={18} />} label="Cronogramas" active={location.pathname === '/schedules'} />
+          <NavItem to="/holidays" icon={<CalendarClock size={18} />} label="Feriados e Recessos" active={location.pathname === '/holidays'} />
+          <NavItem to="/alerts" icon={<Bell size={18} />} label="Alertas" active={location.pathname === '/alerts'} />
+          {user?.role === 'admin' && (
+            <NavItem to="/logs" icon={<ScrollText size={18} />} label="Logs do Sistema" active={location.pathname === '/logs'} />
+          )}
+          {user?.role === 'admin' && (
+            <NavItem to="/users" icon={<UsersIcon size={18} />} label="Usuários" active={location.pathname === '/users'} />
+          )}
         </nav>
 
-        <div className="p-4 mt-auto">
-          <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
-            <div className="flex items-center gap-2 mb-2 text-blue-400">
-              <Info size={16} />
-              <span className="text-xs font-bold uppercase">Suporte Institucional</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Sistema de auxílio à coordenação acadêmica para geração de cronogramas.
+        <div className="p-4">
+          <div className="p-4 rounded-xl bg-surface-2 border border-line">
+            <p className="text-[11px] text-muted leading-relaxed">
+              Sistema de apoio à coordenação acadêmica para geração e organização de cronogramas de aulas.
             </p>
           </div>
         </div>
@@ -74,23 +59,36 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         {/* Header */}
-        <header className="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-[#0f172a]/80 backdrop-blur-md z-10">
+        <header className="h-16 border-b border-line flex items-center justify-between px-6 md:px-8 bg-surface/80 backdrop-blur-md z-10">
           <div className="flex items-center gap-4">
-            <button className="md:hidden p-2 hover:bg-slate-800 rounded-lg">
+            <button className="md:hidden p-2 hover:bg-surface-2 rounded-lg text-muted">
               <Menu size={20} />
             </button>
-            <h2 className="text-sm font-medium text-slate-400">Bem-vindo, Coordenador</h2>
+            <h2 className="text-sm font-medium text-muted hidden sm:block">Coordenação acadêmica</h2>
           </div>
-          
-          <div className="flex items-center gap-3">
-             <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold">
-               GU
-             </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggle}
+              aria-label={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+              className="w-9 h-9 rounded-lg border border-line bg-surface-2 flex items-center justify-center text-muted hover:text-ink transition-colors"
+            >
+              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+            <div className="hidden sm:block text-right leading-tight mr-1">
+              <p className="text-xs font-medium text-ink">{user?.name}</p>
+              <p className="text-[11px] text-muted capitalize">{user?.role}</p>
+            </div>
+            <div title={user?.name} className="w-9 h-9 rounded-full bg-surface-2 border border-line flex items-center justify-center text-xs font-semibold text-ink">
+              {initials}
+            </div>
+            <button onClick={() => void logout()} aria-label="Sair" title="Sair" className="w-9 h-9 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors">
+              <LogOut size={17} />
+            </button>
           </div>
         </header>
 
-        {/* Page Area */}
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
           {children}
         </div>
       </main>
@@ -98,14 +96,24 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   );
 };
 
-const NavItem = ({ to, icon, label, active = false }: { to: string, icon: any, label: string, active?: boolean }) => (
-  <Link to={to} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 ${
-    active 
-      ? 'bg-blue-600/10 text-blue-400 border border-blue-500/20 shadow-sm shadow-blue-500/5' 
-      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
-  }`}>
+interface NavItemProps {
+  to: string;
+  icon: ReactNode;
+  label: string;
+  active?: boolean;
+}
+
+const NavItem = ({ to, icon, label, active = false }: NavItemProps) => (
+  <Link
+    to={to}
+    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
+      active
+        ? 'bg-accent/10 text-accent border border-accent/20'
+        : 'text-muted hover:bg-surface-2 hover:text-ink border border-transparent'
+    }`}
+  >
     {icon}
-    <span className="text-sm font-medium">{label}</span>
+    <span>{label}</span>
   </Link>
 );
 

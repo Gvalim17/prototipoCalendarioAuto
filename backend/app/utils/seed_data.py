@@ -1,31 +1,43 @@
 import json
 import os
 from datetime import datetime, date
-from sqlalchemy.orm import Session
-from ..models.base import Holiday, Recess, MBA, Module, Discipline, SessionLocal, engine, Base
+from ..models.base import Holiday, Recess, Course, Module, Discipline, AcademicLevel, Base
+from ..database import SessionLocal, engine
 
 def seed_data():
     db = SessionLocal()
     try:
         # Garante que as tabelas existam
         Base.metadata.create_all(bind=engine)
-        
-        # 1. Seed MBAs
-        if not db.query(MBA).first():
-            mbas = [
-                MBA(name="MBA em Engenharia de Dados", description="Foco em Big Data e Analytics", year=2026),
-                MBA(name="MBA em Gestão Estratégica", description="Liderança e Processos", year=2026)
-            ]
-            db.add_all(mbas)
-            db.commit()
-            print("MBAs semeados.")
 
-            # 2. Seed Módulos e Disciplinas (para o primeiro MBA)
-            mba1 = db.query(MBA).first()
-            mod1 = Module(name="Módulo Técnico I", mba_id=mba1.id)
+        # 1. Seed Cursos
+        if not db.query(Course).first():
+            courses = [
+                Course(
+                    name="MBA em Engenharia de Dados",
+                    institution="Instituto Exemplo",
+                    academic_level=AcademicLevel.MBA,
+                    description="Foco em Big Data e Analytics",
+                    year=2026,
+                ),
+                Course(
+                    name="MBA em Gestão Estratégica",
+                    institution="Instituto Exemplo",
+                    academic_level=AcademicLevel.MBA,
+                    description="Liderança e Processos",
+                    year=2026,
+                ),
+            ]
+            db.add_all(courses)
+            db.commit()
+            print("Cursos semeados.")
+
+            # 2. Seed Módulos e Disciplinas (para o primeiro Curso)
+            course1 = db.query(Course).first()
+            mod1 = Module(name="Módulo Técnico I", course_id=course1.id)
             db.add(mod1)
             db.commit()
-            
+
             discs = [
                 Discipline(name="Arquitetura de Big Data", code="ABD01", module_id=mod1.id),
                 Discipline(name="Processamento em Stream", code="PES02", module_id=mod1.id)
@@ -38,10 +50,10 @@ def seed_data():
         json_path = os.path.join(os.path.dirname(__file__), "holidays_2026.json")
         with open(json_path, "r", encoding="utf-8") as f:
             holidays_data = json.load(f)
-            
+
         # Limpa feriados existentes para garantir a lista nova
         db.query(Holiday).delete()
-        
+
         for h in holidays_data:
             h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
             new_holiday = Holiday(
@@ -51,7 +63,7 @@ def seed_data():
                 source=h.get("source", "Institucional")
             )
             db.add(new_holiday)
-        
+
         # 4. Seed Recesso
         if not db.query(Recess).first():
             recess = Recess(

@@ -1,52 +1,27 @@
-from fastapi import FastAPI, Depends, HTTPException, File, Form, UploadFile
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from typing import List
-import pandas as pd
-import io
-from .models.base import Base, MBA, Module, Discipline, Holiday, Recess, ScheduleConfig
-from .schemas.base_schemas import (
-    MBACreate, MBARead,
-    ModuleCreate, ModuleRead,
-    DisciplineCreate, DisciplineRead,
-    HolidayCreate, HolidayRead,
-    RecessCreate, RecessRead,
-    ScheduleConfigBase, ScheduleResponse,
-    MBAUpdate, ModuleUpdate, DisciplineUpdate,
-    FullScheduleCreate, FullScheduleRead,
-    CalendarEventRead, PreviewExportRequest,
-    ResolveConflictsRequest, ResolvedScheduleResponse
-)
-from .models.base import ScheduledClass
-from .services.holiday_importer import import_holidays, parse_holiday_file
-from .services.schedule_generator import ScheduleGeneratorService
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, joinedload
-from fastapi.middleware.cors import CORSMiddleware
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-# Database
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db").strip()
-# Heroku/some providers use postgres:// — SQLAlchemy 2.x requires postgresql://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+from .database import init_db
+from .logging_config import get_logger, setup_logging
+from .middleware.request_logging import RequestLoggingMiddleware
+from .dependencies import get_current_user, require_csrf
+from .routers import academic, alerts, auth, holidays, lesson_plans, logs, recesses, schedules, users
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base.metadata.create_all(bind=engine)
+setup_logging()
+logger = get_logger()
 
-app = FastAPI(title="MBA 2026 · Sistema de Calendário Inteligente")
+init_db()
+logger.info("Aplicação inicializada", extra={"event": "startup"})
+
+app = FastAPI(title="Calendário Acadêmico · Sistema de Cronogramas")
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
-    "https://calendarioauto.vercel.app"
+    "https://calendarioauto.vercel.app",
 ]
 env_origins = os.getenv("ALLOWED_ORIGINS")
 if env_origins:
@@ -55,7 +30,6 @@ if env_origins:
         if clean and clean not in ALLOWED_ORIGINS:
             ALLOWED_ORIGINS.append(clean)
 
-print(f"CORS ALLOWED_ORIGINS: {ALLOWED_ORIGINS}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -63,393 +37,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLoggingMiddleware)
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "API de Calendário MBA 2026"}
-
-# --- MBA ---
-@app.post("/mbas/", response_model=MBARead)
-def create_mba(mba: MBACreate, db: Session = Depends(get_db)):
-    db_mba = MBA(**mba.model_dump())
-    db.add(db_mba)
-    db.commit()
-    db.refresh(db_mba)
-    return db_mba
-
-@app.get("/mbas/", response_model=List[MBARead])
-def list_mbas(db: Session = Depends(get_db)):
-    return (
-        db.query(MBA)
-        .options(joinedload(MBA.modules).joinedload(Module.disciplines))
-        .all()
-    )
-
-@app.put("/mbas/{mba_id}", response_model=MBARead)
-def update_mba(mba_id: int, mba_update: MBAUpdate, db: Session = Depends(get_db)):
-    db_mba = db.query(MBA).filter(MBA.id == mba_id).first()
-    if not db_mba:
-        raise HTTPException(status_code=404, detail="MBA não encontrado")
-    for key, value in mba_update.model_dump(exclude_unset=True).items():
-        setattr(db_mba, key, value)
-    db.commit()
-    db.refresh(db_mba)
-    return db_mba
-
-@app.delete("/mbas/{mba_id}")
-def delete_mba(mba_id: int, db: Session = Depends(get_db)):
-    db_mba = db.query(MBA).filter(MBA.id == mba_id).first()
-    if not db_mba:
-        raise HTTPException(status_code=404, detail="MBA não encontrado")
-    db.delete(db_mba)
-    db.commit()
-    return {"message": "MBA excluído com sucesso"}
-
-# --- Modules ---
-@app.post("/modules/", response_model=ModuleRead)
-def create_module(module: ModuleCreate, db: Session = Depends(get_db)):
-    db_mod = Module(**module.model_dump())
-    db.add(db_mod)
-    db.commit()
-    db.refresh(db_mod)
-    return db_mod
-
-@app.get("/mbas/{mba_id}/modules", response_model=List[ModuleRead])
-def list_mba_modules(mba_id: int, db: Session = Depends(get_db)):
-    return db.query(Module).filter(Module.mba_id == mba_id).all()
-
-# --- Disciplines ---
-@app.post("/disciplines/", response_model=DisciplineRead)
-def create_discipline(discipline: DisciplineCreate, db: Session = Depends(get_db)):
-    db_disc = Discipline(**discipline.model_dump())
-    db.add(db_disc)
-    db.commit()
-    db.refresh(db_disc)
-    return db_disc
-
-@app.get("/modules/{module_id}/disciplines", response_model=List[DisciplineRead])
-def list_module_disciplines(module_id: int, db: Session = Depends(get_db)):
-    return db.query(Discipline).filter(Discipline.module_id == module_id).all()
-
-@app.put("/modules/{module_id}", response_model=ModuleRead)
-def update_module(module_id: int, module_update: ModuleUpdate, db: Session = Depends(get_db)):
-    db_mod = db.query(Module).filter(Module.id == module_id).first()
-    if not db_mod:
-        raise HTTPException(status_code=404, detail="Módulo não encontrado")
-    for key, value in module_update.model_dump(exclude_unset=True).items():
-        setattr(db_mod, key, value)
-    db.commit()
-    db.refresh(db_mod)
-    return db_mod
-
-@app.delete("/modules/{module_id}")
-def delete_module(module_id: int, db: Session = Depends(get_db)):
-    db_mod = db.query(Module).filter(Module.id == module_id).first()
-    if not db_mod:
-        raise HTTPException(status_code=404, detail="Módulo não encontrado")
-    db.delete(db_mod)
-    db.commit()
-    return {"message": "Módulo excluído com sucesso"}
-
-@app.put("/disciplines/{discipline_id}", response_model=DisciplineRead)
-def update_discipline(discipline_id: int, disc_update: DisciplineUpdate, db: Session = Depends(get_db)):
-    db_disc = db.query(Discipline).filter(Discipline.id == discipline_id).first()
-    if not db_disc:
-        raise HTTPException(status_code=404, detail="Disciplina não encontrada")
-    for key, value in disc_update.model_dump(exclude_unset=True).items():
-        setattr(db_disc, key, value)
-    db.commit()
-    db.refresh(db_disc)
-    return db_disc
-
-@app.delete("/disciplines/{discipline_id}")
-def delete_discipline(discipline_id: int, db: Session = Depends(get_db)):
-    db_disc = db.query(Discipline).filter(Discipline.id == discipline_id).first()
-    if not db_disc:
-        raise HTTPException(status_code=404, detail="Disciplina não encontrada")
-    db.delete(db_disc)
-    db.commit()
-    return {"message": "Disciplina excluída com sucesso"}
+    return {"status": "online", "message": "API de Calendário Acadêmico"}
 
 
-@app.get("/disciplines/search")
-def search_disciplines(q: str = "", db: Session = Depends(get_db)):
-    if len(q) < 2:
-        return []
-    results = (
-        db.query(Discipline, Module, MBA)
-        .join(Module, Discipline.module_id == Module.id)
-        .join(MBA, Module.mba_id == MBA.id)
-        .filter(Discipline.name.ilike(f"%{q}%"))
-        .limit(10)
-        .all()
-    )
-    return [
-        {
-            "id": disc.id,
-            "name": disc.name,
-            "code": disc.code,
-            "module_name": mod.name,
-            "mba_name": mba.name,
-        }
-        for disc, mod, mba in results
-    ]
-
-# --- Holiday ---
-@app.post("/holidays/", response_model=HolidayRead)
-def create_holiday(holiday: HolidayCreate, db: Session = Depends(get_db)):
-    db_holiday = Holiday(**holiday.model_dump())
-    db.add(db_holiday)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=f"Já existe um feriado cadastrado na data {holiday.date}.")
-    db.refresh(db_holiday)
-    return db_holiday
-
-@app.get("/holidays/", response_model=List[HolidayRead])
-def list_holidays(db: Session = Depends(get_db)):
-    return db.query(Holiday).order_by(Holiday.date).all()
-
-@app.delete("/holidays/all")
-def delete_all_holidays(db: Session = Depends(get_db)):
-    db.query(Holiday).delete()
-    db.commit()
-    return {"message": "Todos os feriados foram removidos"}
-
-@app.delete("/holidays/{holiday_id}")
-def delete_holiday(holiday_id: int, db: Session = Depends(get_db)):
-    db_holiday = db.query(Holiday).filter(Holiday.id == holiday_id).first()
-    if not db_holiday:
-        raise HTTPException(status_code=404, detail="Feriado não encontrado")
-    db.delete(db_holiday)
-    db.commit()
-    return {"message": "Feriado removido com sucesso"}
-
-@app.post("/holidays/upload/")
-async def upload_holidays(
-    file: UploadFile = File(...),
-    year: int = Form(2026),
-    db: Session = Depends(get_db),
-):
-    try:
-        content = await file.read()
-        parsed = parse_holiday_file(file.filename or "", content, default_year=year)
-        result = import_holidays(db, parsed["rows"], parsed["errors"])
-        result["columns"] = parsed["columns"]
-        return result
-    except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao importar feriados: {str(e)}")
-
-# --- Recess ---
-@app.post("/recesses/", response_model=RecessRead)
-def create_recess(recess: RecessCreate, db: Session = Depends(get_db)):
-    if recess.start_date >= recess.end_date:
-        raise HTTPException(status_code=422, detail="A data de início deve ser anterior à data de fim.")
-    overlapping = db.query(Recess).filter(
-        Recess.start_date <= recess.end_date,
-        Recess.end_date >= recess.start_date,
-    ).first()
-    if overlapping:
-        raise HTTPException(
-            status_code=409,
-            detail=f"O período informado se sobrepõe com o recesso '{overlapping.description}' ({overlapping.start_date} – {overlapping.end_date})."
-        )
-    db_recess = Recess(**recess.model_dump())
-    db.add(db_recess)
-    db.commit()
-    db.refresh(db_recess)
-    return db_recess
-
-@app.get("/recesses/", response_model=List[RecessRead])
-def list_recesses(db: Session = Depends(get_db)):
-    return db.query(Recess).all()
-
-@app.delete("/recesses/all")
-def delete_all_recesses(db: Session = Depends(get_db)):
-    db.query(Recess).delete()
-    db.commit()
-    return {"message": "Todos os recessos foram removidos"}
-
-@app.delete("/recesses/{recess_id}")
-def delete_recess(recess_id: int, db: Session = Depends(get_db)):
-    db_recess = db.query(Recess).filter(Recess.id == recess_id).first()
-    if not db_recess:
-        raise HTTPException(status_code=404, detail="Recesso não encontrado")
-    db.delete(db_recess)
-    db.commit()
-    return {"message": "Recesso removido com sucesso"}
-
-# --- Schedule Generator ---
-@app.post("/generate-schedule/", response_model=ScheduleResponse)
-def generate_schedule(config: ScheduleConfigBase, db: Session = Depends(get_db)):
-    try:
-        # Convert schema to temporary model object (not saved yet)
-        cfg_model = ScheduleConfig(**config.model_dump())
-        result = ScheduleGeneratorService.generate_schedule(db, cfg_model)
-        
-        return ScheduleResponse(
-            dates=result["dates"],
-            skipped=result["skipped"],
-            config=config
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/schedules/resolve-conflicts/", response_model=ResolvedScheduleResponse)
-def resolve_schedule_conflicts(request: ResolveConflictsRequest, db: Session = Depends(get_db)):
-    try:
-        cfg_model = ScheduleConfig(**request.config.model_dump())
-        resolutions = [r.model_dump() for r in request.resolutions]
-        result = ScheduleGeneratorService.resolve_conflicts(db, cfg_model, resolutions)
-        
-        return ResolvedScheduleResponse(
-            dates=result["dates"],
-            config=request.config
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/schedules/", response_model=FullScheduleRead)
-def save_schedule(schedule_data: FullScheduleCreate, db: Session = Depends(get_db)):
-    # 1. Save Config
-    db_config = ScheduleConfig(**schedule_data.config.model_dump())
-    db.add(db_config)
-    db.commit()
-    db.refresh(db_config)
-    
-    # 2. Save Classes
-    for cls in schedule_data.classes:
-        db_class = ScheduledClass(
-            config_id=db_config.id,
-            date=cls.date,
-            order=cls.order
-        )
-        db.add(db_class)
-    
-    db.commit()
-    db.refresh(db_config)
-    return db_config
-
-@app.delete("/schedules/all")
-def delete_all_schedules(db: Session = Depends(get_db)):
-    db.query(ScheduledClass).delete()
-    db.query(ScheduleConfig).delete()
-    db.commit()
-    return {"message": "Todos os cronogramas foram removidos"}
-
-@app.delete("/schedules/{config_id}")
-def delete_specific_schedule(config_id: int, db: Session = Depends(get_db)):
-    db_config = db.query(ScheduleConfig).filter(ScheduleConfig.id == config_id).first()
-    if not db_config:
-        raise HTTPException(status_code=404, detail="Cronograma não encontrado")
-    
-    # Cascade delete is handled by database normally, but manual here for safety
-    db.query(ScheduledClass).filter(ScheduledClass.config_id == config_id).delete()
-    db.delete(db_config)
-    db.commit()
-    return {"message": "Cronograma removido com sucesso"}
-
-@app.get("/schedules/export/xlsx")
-def export_schedules_xlsx(db: Session = Depends(get_db)):
-    DAYS_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
-    results = (
-        db.query(ScheduledClass)
-        .join(ScheduleConfig)
-        .join(MBA, ScheduleConfig.mba_id == MBA.id)
-        .join(Module, ScheduleConfig.module_id == Module.id)
-        .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
-        .order_by(ScheduledClass.date)
-        .all()
-    )
-    rows = [
-        {
-            "MBA": sc.config.mba.name,
-            "Módulo": sc.config.module.name,
-            "Disciplina": sc.config.discipline.name,
-            "Formato": sc.config.format.value.capitalize(),
-            "Data": sc.date.strftime('%d/%m/%Y'),
-            "Dia da Semana": DAYS_PT[sc.date.weekday()],
-            "Nº da Aula": sc.order,
-            "Carga Horária (h)": sc.config.workload,
-        }
-        for sc in results
-    ]
-    df = pd.DataFrame(rows if rows else [{"MBA": "", "Módulo": "", "Disciplina": "", "Formato": "", "Data": "", "Dia da Semana": "", "Nº da Aula": "", "Carga Horária (h)": ""}])
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Cronograma')
-        ws = writer.sheets['Cronograma']
-        for col in ws.columns:
-            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 4, 40)
-    output.seek(0)
-    return StreamingResponse(
-        output,
-        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': 'attachment; filename="cronograma_MBA_2026.xlsx"'}
-    )
-
-@app.post("/schedules/export-preview/xlsx")
-def export_preview_xlsx(data: PreviewExportRequest):
-    DAYS_PT = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
-    rows = [
-        {
-            "MBA": data.mba_name,
-            "Módulo": data.module_name,
-            "Disciplina": data.discipline_name,
-            "Formato": data.format.capitalize(),
-            "Data": d.strftime('%d/%m/%Y'),
-            "Dia da Semana": DAYS_PT[d.weekday()],
-            "Nº da Aula": i + 1,
-            "Carga Horária (h)": data.workload,
-        }
-        for i, d in enumerate(data.dates)
-    ]
-    df = pd.DataFrame(rows)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Preview')
-        ws = writer.sheets['Preview']
-        for col in ws.columns:
-            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 4, 40)
-    output.seek(0)
-    return StreamingResponse(
-        output,
-        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': 'attachment; filename="cronograma_preview.xlsx"'}
-    )
-
-@app.get("/schedules/", response_model=List[CalendarEventRead])
-def list_all_scheduled_classes(db: Session = Depends(get_db)):
-    # Realiza join para obter nomes do MBA e Disciplina
-    results = (
-        db.query(ScheduledClass)
-        .join(ScheduleConfig)
-        .join(MBA, ScheduleConfig.mba_id == MBA.id)
-        .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
-        .all()
-    )
-    
-    events = []
-    for sc in results:
-        events.append({
-            "id": sc.id,
-            "date": sc.date,
-            "order": sc.order,
-            "mba_name": sc.config.mba.name,
-            "discipline_name": sc.config.discipline.name,
-            "color": "blue" # Poderia ser dinâmico por MBA futuramente
-        })
-    return events
+app.include_router(auth.router)
+app.include_router(alerts.system_router)
+# Sem sessão: valida por token próprio na URL (Google Agenda/Outlook buscam sozinhos).
+app.include_router(alerts.public_calendar_router)
+protected_dependencies = [Depends(get_current_user), Depends(require_csrf)]
+app.include_router(academic.router, dependencies=protected_dependencies)
+app.include_router(holidays.router, dependencies=protected_dependencies)
+app.include_router(recesses.router, dependencies=protected_dependencies)
+app.include_router(schedules.router, dependencies=protected_dependencies)
+app.include_router(logs.router, dependencies=protected_dependencies)
+app.include_router(alerts.router, dependencies=protected_dependencies)
+app.include_router(users.router, dependencies=protected_dependencies)
+app.include_router(lesson_plans.router, dependencies=protected_dependencies)
