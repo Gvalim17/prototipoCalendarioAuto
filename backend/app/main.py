@@ -18,7 +18,7 @@ logger = get_logger()
 init_db()
 logger.info("Aplicação inicializada", extra={"event": "startup"})
 
-app = FastAPI(title="Calendário Acadêmico · Sistema de Cronogramas")
+app = FastAPI(title="CronEdu · Sistema de Cronogramas")
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -75,7 +75,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "API de Calendário Acadêmico"}
+    return {"status": "online", "message": "API do CronEdu"}
 
 
 app.include_router(auth.router)

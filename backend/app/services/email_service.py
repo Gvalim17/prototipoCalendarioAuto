@@ -20,7 +20,7 @@ def _bool_env(name: str, default: bool) -> bool:
 def send_password_reset_email(recipient: str, reset_url: str) -> None:
     _send_email(
         recipient,
-        "Redefinição de senha - Calendário Acadêmico",
+        "Redefinição de senha - CronEdu",
         "Recebemos uma solicitação para redefinir sua senha.\n\n"
         f"Use este link, válido por 20 minutos e para uma única utilização:\n{reset_url}\n\n"
         "Se você não solicitou esta alteração, ignore esta mensagem.",

@@ -66,6 +66,7 @@ export interface CalendarEvent {
   academic_level?: string | null;
   academic_level_label?: string | null;
   discipline_name: string;
+  event_title?: string | null;
   start_time?: string | null;
   end_time?: string | null;
   color?: string;
@@ -104,6 +105,7 @@ export interface ScheduleConfigRead {
   start_time?: string | null;
   end_time?: string | null;
   holiday_policy: HolidayPolicy;
+  event_title?: string | null;
   num_classes?: number | null;
   workload?: number | null;
   course_name: string;

@@ -126,7 +126,7 @@ const Login = () => {
       <section className="w-full max-w-md">
         <div className="flex items-center gap-3 mb-9">
           <div className="w-11 h-11 rounded-lg bg-accent text-accent-fg flex items-center justify-center"><CalendarDays size={23} /></div>
-          <div><h1 className="text-xl font-semibold leading-tight">Calendário Acadêmico</h1><p className="text-sm text-muted">Gestão de cronogramas</p></div>
+          <div><h1 className="text-xl font-semibold leading-tight">CronEdu</h1><p className="text-sm text-muted">Gestão de cronogramas</p></div>
         </div>
         <div className="card p-6 sm:p-8">
           {(isForgot || isReset) && <button onClick={() => changeMode('login')} className="text-xs text-muted hover:text-ink flex items-center gap-1 mb-5"><ArrowLeft size={14} /> Voltar para entrar</button>}

@@ -25,7 +25,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </div>
             <div>
               <h1 className="text-base font-semibold tracking-tight text-ink leading-tight">
-                Calendário Acadêmico
+                CronEdu
               </h1>
               <p className="text-[10px] uppercase tracking-widest text-muted font-medium">Gestão de Cronogramas</p>
             </div>

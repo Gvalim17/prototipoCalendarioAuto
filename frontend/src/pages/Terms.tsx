@@ -21,7 +21,7 @@ const Terms = () => {
               <CalendarDays className="text-accent-fg" size={20} />
             </div>
             <div>
-              <h1 className="text-lg font-semibold leading-tight">Calendário Acadêmico</h1>
+              <h1 className="text-lg font-semibold leading-tight">CronEdu</h1>
               <p className="text-xs text-muted">Termos de Uso e Política de Privacidade</p>
             </div>
           </div>
@@ -36,7 +36,7 @@ const Terms = () => {
           <div>
             <p className="text-xs text-faint">Versão {PRIVACY_POLICY_VERSION} · Última atualização: julho de 2026</p>
             <p className="text-sm text-muted mt-3 leading-relaxed">
-              Este documento reúne os Termos de Uso e a Política de Privacidade do Calendário Acadêmico
+              Este documento reúne os Termos de Uso e a Política de Privacidade do CronEdu
               ("Sistema"), uma ferramenta de apoio à coordenação acadêmica para geração e organização de
               cronogramas de aulas. Ao criar uma conta, você concorda com os termos abaixo e com o
               tratamento dos seus dados pessoais nos termos da Lei nº 13.709/2018 (Lei Geral de Proteção

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..dependencies import ensure_owner_or_admin, get_current_user, require_admin_action, validate_schedule_references
 from ..logging_config import get_logger
-from ..models.base import Course, Discipline, Module, ScheduleConfig, ScheduledClass, ScheduledClassStatus, User
+from ..models.base import Course, Discipline, Holiday, Module, ScheduleConfig, ScheduledClass, ScheduledClassStatus, User
 from ..schemas.base_schemas import (
     CalendarEventRead,
     FullScheduleCreate,
@@ -94,6 +94,7 @@ def _config_to_read(db_config: ScheduleConfig) -> dict:
         "start_time": db_config.start_time,
         "end_time": db_config.end_time,
         "holiday_policy": db_config.holiday_policy,
+        "event_title": db_config.event_title,
         "num_classes": db_config.num_classes,
         "workload": db_config.workload,
         "course_name": db_config.course.name,
@@ -107,19 +108,33 @@ def _config_to_read(db_config: ScheduleConfig) -> dict:
 
 
 @router.get("/stats/", response_model=StatsRead)
-def get_stats(db: Session = Depends(get_db)):
+def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    courses_q = db.query(Course)
+    modules_q = db.query(Module)
+    disciplines_q = db.query(Discipline)
+    classes_q = db.query(ScheduledClass).join(ScheduleConfig)
+    if user.role != "admin":
+        courses_q = courses_q.filter(Course.owner_id == user.id)
+        modules_q = modules_q.filter(Module.owner_id == user.id)
+        disciplines_q = disciplines_q.filter(Discipline.owner_id == user.id)
+        classes_q = classes_q.filter(ScheduleConfig.owner_id == user.id)
     return StatsRead(
-        courses=db.query(Course).count(),
-        modules=db.query(Module).count(),
-        disciplines=db.query(Discipline).count(),
-        scheduled_classes=db.query(ScheduledClass).count(),
+        courses=courses_q.count(),
+        modules=modules_q.count(),
+        disciplines=disciplines_q.count(),
+        scheduled_classes=classes_q.count(),
     )
 
 
+def _holiday_warnings_for(db: Session, dates: list) -> list:
+    holidays = {h.date: h.description for h in db.query(Holiday).all()}
+    return ScheduleGeneratorService.find_holiday_adjacency_warnings(dates, holidays)
+
+
 @router.post("/generate-schedule/", response_model=ScheduleResponse)
-def generate_schedule(config: ScheduleConfigBase, db: Session = Depends(get_db)):
+def generate_schedule(config: ScheduleConfigBase, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        validate_schedule_references(db, config)
+        validate_schedule_references(db, config, user)
         cfg_model = _config_to_orm(config)
         result = ScheduleGeneratorService.generate_schedule(db, cfg_model)
 
@@ -131,6 +146,7 @@ def generate_schedule(config: ScheduleConfigBase, db: Session = Depends(get_db))
             config=config,
             num_classes=num_classes,
             total_workload=total_workload,
+            holiday_warnings=_holiday_warnings_for(db, result["dates"]),
         )
     except HTTPException:
         raise
@@ -140,9 +156,9 @@ def generate_schedule(config: ScheduleConfigBase, db: Session = Depends(get_db))
 
 @router.post("/resolve-conflicts/", response_model=ResolvedScheduleResponse, include_in_schema=False)
 @router.post("/schedules/resolve-conflicts/", response_model=ResolvedScheduleResponse)
-def resolve_schedule_conflicts(request: ResolveConflictsRequest, db: Session = Depends(get_db)):
+def resolve_schedule_conflicts(request: ResolveConflictsRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        validate_schedule_references(db, request.config)
+        validate_schedule_references(db, request.config, user)
         cfg_model = _config_to_orm(request.config)
         resolutions = [r.model_dump() for r in request.resolutions]
         result = ScheduleGeneratorService.resolve_conflicts(db, cfg_model, resolutions)
@@ -154,6 +170,7 @@ def resolve_schedule_conflicts(request: ResolveConflictsRequest, db: Session = D
             config=request.config,
             num_classes=num_classes,
             total_workload=total_workload,
+            holiday_warnings=_holiday_warnings_for(db, result["dates"]),
         )
     except HTTPException:
         raise
@@ -219,7 +236,7 @@ def save_schedule(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    validate_schedule_references(db, schedule_data.config)
+    validate_schedule_references(db, schedule_data.config, user)
     if not schedule_data.classes:
         raise HTTPException(status_code=422, detail="O cronograma precisa ter pelo menos uma aula.")
 
@@ -359,7 +376,7 @@ def update_schedule(
     if db_config.owner_id is None:
         db_config.owner_id = user.id
 
-    validate_schedule_references(db, schedule_data.config)
+    validate_schedule_references(db, schedule_data.config, user)
     if not schedule_data.classes:
         raise HTTPException(status_code=422, detail="O cronograma precisa ter pelo menos uma aula.")
 
@@ -513,6 +530,7 @@ def list_all_scheduled_classes(user: User = Depends(get_current_user), db: Sessi
             "academic_level": sc.config.course.academic_level.value,
             "academic_level_label": _level_label(sc.config.course),
             "discipline_name": sc.config.discipline.name,
+            "event_title": sc.config.event_title,
             "start_time": sc.config.start_time,
             "end_time": sc.config.end_time,
             "color": _discipline_color(sc.config.discipline_id),

@@ -1,8 +1,9 @@
 import { ReactNode, useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Calendar, BookOpen, CheckCircle2, AlertCircle, ArrowLeft, ChevronRight, Clock,
   CalendarDays, List as ListIcon, GraduationCap, Download, RefreshCw, XCircle, Star,
+  Pencil, Trash2, Undo2,
 } from 'lucide-react';
 import api from '../api/client';
 import {
@@ -24,10 +25,12 @@ interface FormData {
   start_time: string;
   end_time: string;
   holiday_policy: HolidayPolicy;
+  event_title: string;
 }
 
 interface SkippedDate { date: string; reason: string; suggested_date?: string | null; }
-interface GenerateResponse { dates: string[]; skipped: SkippedDate[]; num_classes: number; total_workload: number; }
+interface HolidayWarning { date: string; adjacent_date: string; position: 'day_before' | 'day_after'; holiday_description: string; }
+interface GenerateResponse { dates: string[]; skipped: SkippedDate[]; num_classes: number; total_workload: number; holiday_warnings?: HolidayWarning[]; }
 
 const getErrorMessage = (error: unknown) => {
   const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
@@ -42,6 +45,17 @@ const classHours = (start: string, end: string): number => {
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
   return Math.max(0, (eh * 60 + em - (sh * 60 + sm)) / 60);
+};
+
+// Formata horas decimais (ex: carga horária = num_aulas * duração/aula, que
+// raramente fecha em número redondo) como "1h40" em vez de "1.6666666h".
+const formatHours = (hours: number): string => {
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m}min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h${String(m).padStart(2, '0')}`;
 };
 
 const ScheduleForm = () => {
@@ -77,6 +91,7 @@ const ScheduleForm = () => {
     start_time: '19:00',
     end_time: '22:00',
     holiday_policy: 'reschedule',
+    event_title: '',
   });
 
   useEffect(() => {
@@ -108,6 +123,7 @@ const ScheduleForm = () => {
           start_time: cfg.start_time ? cfg.start_time.slice(0, 5) : '19:00',
           end_time: cfg.end_time ? cfg.end_time.slice(0, 5) : '22:00',
           holiday_policy: cfg.holiday_policy,
+          event_title: cfg.event_title || '',
         });
       } catch (err) {
         toast.error('Erro ao carregar cronograma para edição: ' + getErrorMessage(err));
@@ -156,6 +172,7 @@ const ScheduleForm = () => {
     start_time: formData.start_time,
     end_time: formData.end_time,
     holiday_policy: formData.holiday_policy,
+    event_title: formData.recurrence === 'na' ? (formData.event_title.trim() || null) : null,
   });
 
   const validate = (): string | null => {
@@ -241,12 +258,14 @@ const ScheduleForm = () => {
     }
   };
 
-  const handleFinalSave = async () => {
+  const handleFinalSave = async (finalDates: string[]) => {
+    if (finalDates.length === 0) { toast.error('O cronograma precisa ter pelo menos uma aula.'); return; }
     setLoading(true);
     try {
+      const sortedDates = [...finalDates].sort();
       const payload = {
         config: buildConfig(),
-        classes: result.dates.map((d, i) => ({ date: d, order: i + 1 })),
+        classes: sortedDates.map((d, i) => ({ date: d, order: i + 1 })),
       };
       if (isEditing) {
         await api.put(`/schedules/${configId}`, payload);
@@ -320,6 +339,18 @@ const ScheduleForm = () => {
         </div>
       </div>
 
+      {isEditing && (
+        <div className="card p-4 flex items-center justify-between gap-3 bg-accent/5 border-accent/20">
+          <p className="text-sm text-muted">
+            Este formulário recalcula <strong className="text-ink">todas</strong> as aulas do cronograma. Para alterar
+            ou cancelar só uma aula específica, sem mexer nas demais, use a edição individual.
+          </p>
+          <Link to={`/schedules/${configId}/plan`} className="btn-ghost shrink-0 whitespace-nowrap">
+            Editar aulas individualmente
+          </Link>
+        </div>
+      )}
+
       {step === 1 && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
@@ -365,9 +396,19 @@ const ScheduleForm = () => {
                   onChange={(e) => setFormData({ ...formData, recurrence: e.target.value as Recurrence })}>
                   <option value="semanal">Semanal</option>
                   <option value="quinzenal">Quinzenal</option>
-                  <option value="na">Evento único (masterclass)</option>
+                  <option value="na">Evento único</option>
                 </select>
               </Field>
+
+              {formData.recurrence === 'na' && (
+                <Field label="Do que se trata este evento?">
+                  <input
+                    type="text" className="input-custom" maxLength={200}
+                    placeholder="Ex: Palestra sobre Ética em IA, Banca de TCC, Aula magna..."
+                    value={formData.event_title} onChange={(e) => setFormData({ ...formData, event_title: e.target.value })}
+                  />
+                </Field>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Data de início" icon={<Calendar size={13} />}>
@@ -444,7 +485,7 @@ const ScheduleForm = () => {
               {formData.recurrence !== 'na' && (
                 <SummaryRow label="Dias" value={formData.days_of_week.map((d) => WEEKDAYS[d].short).join(', ') || '—'} />
               )}
-              <SummaryRow label="Duração/aula" value={perClass > 0 ? `${perClass}h` : '—'} />
+              <SummaryRow label="Duração/aula" value={perClass > 0 ? formatHours(perClass) : '—'} />
               <SummaryRow label="Política" value={
                 formData.holiday_policy === 'skip' ? 'Não remarcar' :
                 formData.holiday_policy === 'manual' ? 'Remarcar manualmente' : 'Remarcar automaticamente'
@@ -548,7 +589,7 @@ const ScheduleForm = () => {
                         <span className="font-semibold">{idx + 1}</span>
                       </div>
                       <div>
-                        <p className="text-xs uppercase text-muted tracking-wide">{formData.recurrence === 'na' ? 'Masterclass' : 'Encontro'}</p>
+                        <p className="text-xs uppercase text-muted tracking-wide">{formData.recurrence === 'na' ? (formData.event_title.trim() || 'Evento único') : 'Encontro'}</p>
                         <h4 className="text-ink font-medium capitalize">
                           {new Date(dateStr + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long' })}
                         </h4>
@@ -563,6 +604,7 @@ const ScheduleForm = () => {
                   dates={result.dates}
                   holidays={holidays}
                   isNa={formData.recurrence === 'na'}
+                  eventTitle={formData.event_title}
                   onPrev={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
                   onNext={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
                 />
@@ -586,11 +628,31 @@ const ScheduleForm = () => {
                 </div>
               )}
 
+              {(result.holiday_warnings?.length ?? 0) > 0 && (
+                <div className="card p-5">
+                  <h4 className="font-medium text-ink text-sm mb-3 flex items-center gap-2">
+                    <AlertCircle size={16} className="text-warn" /> Atenção: feriado próximo
+                  </h4>
+                  <div className="space-y-2">
+                    {result.holiday_warnings!.map((w, i) => (
+                      <div key={i} className="p-3 rounded-lg bg-surface-2 border border-line">
+                        <p className="text-sm font-medium text-warn">
+                          {new Date(w.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long' })}
+                        </p>
+                        <p className="text-xs text-muted">
+                          {w.position === 'day_before' ? 'Véspera' : 'Dia seguinte'} de {w.holiday_description} ({new Date(w.adjacent_date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}) — pode haver mais faltas, considere remarcar essa aula individualmente se preferir.
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="card p-5">
                 <p className="text-xs uppercase text-muted tracking-wide">Resumo</p>
                 <div className="space-y-2 my-4">
                   <SummaryRow label="Total de aulas" value={`${result.dates.length}`} strong />
-                  <SummaryRow label="Carga horária total" value={`${result.total_workload}h`} strong />
+                  <SummaryRow label="Carga horária total" value={formatHours(result.total_workload)} strong />
                   {formData.holiday_policy === 'skip' && result.skipped.length > 0 && (
                     <SummaryRow label="Aulas perdidas" value={`${result.skipped.length}`} />
                   )}
@@ -621,6 +683,7 @@ const ScheduleForm = () => {
           startTime={formData.start_time}
           endTime={formData.end_time}
           totalWorkload={result.total_workload}
+          classHours={classHours(formData.start_time, formData.end_time)}
           loading={loading}
           isEditing={isEditing}
           onCancel={() => setShowSaveConfirm(false)}
@@ -658,11 +721,12 @@ interface PreviewCalendarProps {
   dates: string[];
   holidays: Holiday[];
   isNa: boolean;
+  eventTitle?: string;
   onPrev: () => void;
   onNext: () => void;
 }
 
-const PreviewCalendar = ({ currentMonth, dates, holidays, isNa, onPrev, onNext }: PreviewCalendarProps) => {
+const PreviewCalendar = ({ currentMonth, dates, holidays, isNa, eventTitle, onPrev, onNext }: PreviewCalendarProps) => {
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -696,7 +760,7 @@ const PreviewCalendar = ({ currentMonth, dates, holidays, isNa, onPrev, onNext }
               {isClass && (
                 <div className="mt-1.5 bg-accent text-accent-fg rounded-md p-2 flex-1 flex flex-col justify-center items-center text-center gap-0.5">
                   {isNa ? <Star size={16} /> : <CheckCircle2 size={16} />}
-                  <span className="text-sm font-bold leading-tight">{isNa ? 'Masterclass' : `Aula ${classIndex + 1}`}</span>
+                  <span className="text-sm font-bold leading-tight">{isNa ? (eventTitle?.trim() || 'Evento único') : `Aula ${classIndex + 1}`}</span>
                 </div>
               )}
               {holiday && !isClass && (
@@ -777,55 +841,109 @@ interface SaveConfirmModalProps {
   startTime: string;
   endTime: string;
   totalWorkload: number;
+  classHours: number;
   loading: boolean;
   isEditing: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (finalDates: string[]) => void;
 }
 
-const SaveConfirmModal = ({ courseName, disciplineName, format, dates, startTime, endTime, totalWorkload, loading, isEditing, onCancel, onConfirm }: SaveConfirmModalProps) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-sm">
-    <div className="card w-full max-w-lg p-6 shadow-2xl max-h-[85vh] flex flex-col">
-      <div className="flex items-start gap-3 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-accent/10 text-accent flex items-center justify-center shrink-0"><CheckCircle2 size={20} /></div>
-        <div>
-          <h3 className="text-lg font-semibold text-ink">{isEditing ? 'Confirmar regeneração' : 'Confirmar cronograma'}</h3>
-          <p className="text-sm text-muted mt-0.5">
-            {isEditing
-              ? 'As aulas atuais deste cronograma serão substituídas pelas novas datas abaixo.'
-              : 'Revise como as aulas ficarão antes de salvar definitivamente.'}
-          </p>
+interface ConfirmRow {
+  key: number;
+  date: string;
+  included: boolean;
+}
+
+const formatConfirmDate = (d: string) =>
+  new Date(d + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long', year: 'numeric' });
+
+const SaveConfirmModal = ({ courseName, disciplineName, format, dates, startTime, endTime, totalWorkload, classHours, loading, isEditing, onCancel, onConfirm }: SaveConfirmModalProps) => {
+  const [rows, setRows] = useState<ConfirmRow[]>(() => dates.map((date, key) => ({ key, date, included: true })));
+  const [editingKey, setEditingKey] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+
+  const includedCount = rows.filter((r) => r.included).length;
+  const workload = Math.round(includedCount * classHours * 100) / 100;
+
+  const toggleIncluded = (key: number) => setRows((prev) => prev.map((r) => r.key === key ? { ...r, included: !r.included } : r));
+  const startEditing = (row: ConfirmRow) => { setEditingKey(row.key); setEditingValue(row.date); };
+  const confirmEdit = (key: number) => {
+    setRows((prev) => prev.map((r) => r.key === key ? { ...r, date: editingValue } : r));
+    setEditingKey(null);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-sm">
+      <div className="card w-full max-w-lg p-6 shadow-2xl max-h-[85vh] flex flex-col">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-accent/10 text-accent flex items-center justify-center shrink-0"><CheckCircle2 size={20} /></div>
+          <div>
+            <h3 className="text-lg font-semibold text-ink">{isEditing ? 'Confirmar regeneração' : 'Confirmar cronograma'}</h3>
+            <p className="text-sm text-muted mt-0.5">
+              {isEditing
+                ? 'As aulas atuais deste cronograma serão substituídas pelas novas datas abaixo.'
+                : 'Revise como as aulas ficarão antes de salvar. Você pode desmarcar ou remarcar uma aula específica antes de confirmar.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-1 mb-4 text-sm">
+          <SummaryRow label="Disciplina" value={disciplineName || '—'} strong />
+          <SummaryRow label="Curso" value={courseName || '—'} />
+          <SummaryRow label="Formato" value={format === 'presencial' ? 'Presencial' : 'Remoto / Online'} />
+          <SummaryRow label="Horário" value={`${startTime} – ${endTime}`} />
+          <SummaryRow label="Total de aulas" value={`${includedCount}${includedCount !== dates.length ? ` de ${dates.length}` : ''}`} strong />
+          <SummaryRow label="Carga horária total" value={formatHours(includedCount === dates.length ? totalWorkload : workload)} strong />
+        </div>
+
+        <p className="text-xs font-medium text-muted uppercase tracking-wide mb-2">Datas confirmadas</p>
+        <div className="flex-1 overflow-y-auto custom-scrollbar border border-line rounded-lg divide-y divide-line">
+          {rows.map((row, i) => (
+            <div key={row.key} className={`flex items-center gap-2 px-3 py-2 text-sm ${!row.included ? 'opacity-50' : ''}`}>
+              <span className="text-muted shrink-0 w-14">Aula {i + 1}</span>
+              {editingKey === row.key ? (
+                <span className="flex-1 flex items-center gap-2">
+                  <input
+                    type="date" value={editingValue} onChange={(e) => setEditingValue(e.target.value)}
+                    className="input-custom h-8 py-0 text-sm w-auto"
+                  />
+                  <button onClick={() => confirmEdit(row.key)} className="text-xs text-accent font-medium hover:underline">Confirmar</button>
+                  <button onClick={() => setEditingKey(null)} className="text-xs text-muted hover:underline">Cancelar</button>
+                </span>
+              ) : (
+                <>
+                  <span className={`flex-1 text-ink capitalize ${!row.included ? 'line-through' : ''}`}>{formatConfirmDate(row.date)}</span>
+                  {row.included && (
+                    <button onClick={() => startEditing(row)} title="Remarcar esta aula" className="p-1.5 text-muted hover:text-accent transition-colors shrink-0">
+                      <Pencil size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => toggleIncluded(row.key)}
+                    title={row.included ? 'Desmarcar esta aula' : 'Remarcar (incluir de novo)'}
+                    className={`p-1.5 transition-colors shrink-0 ${row.included ? 'text-muted hover:text-danger' : 'text-accent hover:text-accent'}`}
+                  >
+                    {row.included ? <Trash2 size={14} /> : <Undo2 size={14} />}
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+          {rows.length === 0 && <p className="text-sm text-muted p-3">Nenhuma aula gerada.</p>}
+        </div>
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onCancel} disabled={loading} className="btn-ghost flex-1 h-11">Voltar e ajustar</button>
+          <button
+            onClick={() => onConfirm(rows.filter((r) => r.included).map((r) => r.date))}
+            disabled={loading || includedCount === 0} className="btn-primary flex-1 h-11"
+          >
+            {loading ? 'Salvando...' : isEditing ? 'Confirmar e regenerar' : 'Confirmar e salvar'}
+          </button>
         </div>
       </div>
-
-      <div className="space-y-1 mb-4 text-sm">
-        <SummaryRow label="Disciplina" value={disciplineName || '—'} strong />
-        <SummaryRow label="Curso" value={courseName || '—'} />
-        <SummaryRow label="Formato" value={format === 'presencial' ? 'Presencial' : 'Remoto / Online'} />
-        <SummaryRow label="Horário" value={`${startTime} – ${endTime}`} />
-        <SummaryRow label="Total de aulas" value={`${dates.length}`} strong />
-        <SummaryRow label="Carga horária total" value={`${totalWorkload}h`} strong />
-      </div>
-
-      <p className="text-xs font-medium text-muted uppercase tracking-wide mb-2">Datas confirmadas</p>
-      <div className="flex-1 overflow-y-auto custom-scrollbar border border-line rounded-lg divide-y divide-line">
-        {dates.map((d, i) => (
-          <div key={d} className="flex items-center justify-between px-3 py-2 text-sm">
-            <span className="text-muted">Aula {i + 1}</span>
-            <span className="text-ink capitalize">{new Date(d + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long', year: 'numeric' })}</span>
-          </div>
-        ))}
-        {dates.length === 0 && <p className="text-sm text-muted p-3">Nenhuma aula gerada.</p>}
-      </div>
-
-      <div className="flex gap-3 mt-5">
-        <button onClick={onCancel} disabled={loading} className="btn-ghost flex-1 h-11">Voltar e ajustar</button>
-        <button onClick={onConfirm} disabled={loading || dates.length === 0} className="btn-primary flex-1 h-11">
-          {loading ? 'Salvando...' : isEditing ? 'Confirmar e regenerar' : 'Confirmar e salvar'}
-        </button>
-      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export default ScheduleForm;

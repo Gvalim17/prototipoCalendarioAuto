@@ -97,7 +97,7 @@ def _build_ics(db: Session, user: User) -> str:
         .order_by(ScheduledClass.date)
         .all()
     )
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Calendario Academico//Alertas//PT-BR", "CALSCALE:GREGORIAN"]
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//CronEdu//Alertas//PT-BR", "CALSCALE:GREGORIAN"]
     for lesson in lessons:
         if not lesson.config.start_time:
             continue
