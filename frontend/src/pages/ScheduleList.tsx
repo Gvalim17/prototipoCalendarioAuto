@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Pencil, Trash2, Clock, RefreshCw, NotebookPen, Filter } from 'lucide-react';
+import { CalendarDays, Pencil, Trash2, Clock, RefreshCw, NotebookPen, Filter, Building2 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { ACADEMIC_LEVELS, levelLabel, WEEKDAYS, type ScheduleConfigRead } from '../types/domain';
@@ -20,6 +20,16 @@ const POLICY_LABEL: Record<string, string> = {
 };
 
 const formatDate = (d?: string | null) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
+
+// Formata horas decimais (ex: 1.6666h) como "1h40" em vez do número cru.
+const formatHours = (hours?: number | null) => {
+  const totalMinutes = Math.round((hours ?? 0) * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m}min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h${String(m).padStart(2, '0')}`;
+};
 
 const formatWeekdays = (days?: number[]) => {
   if (!days?.length) return 'Dia único';
@@ -166,6 +176,12 @@ const ScheduleList = () => {
                 <div className="min-w-0">
                   <h3 className="font-semibold text-ink truncate">{c.discipline_name}</h3>
                   <p className="text-xs text-muted mt-0.5 truncate">{c.course_name} · {c.module_name}</p>
+                  {c.recurrence === 'na' && c.event_title && (
+                    <p className="text-xs text-accent mt-0.5 truncate">{c.event_title}</p>
+                  )}
+                  {c.institution && (
+                    <p className="text-xs text-faint mt-0.5 truncate flex items-center gap-1"><Building2 size={12} /> {c.institution}</p>
+                  )}
                   {user?.role === 'admin' && c.owner_name && (
                     <p className="text-xs text-faint mt-0.5 truncate">Professor: {c.owner_name}</p>
                   )}
@@ -187,7 +203,7 @@ const ScheduleList = () => {
               </div>
 
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-line">
-                <span className="text-xs text-muted">{c.num_classes ?? 0} aulas · {c.workload ?? 0}h</span>
+                <span className="text-xs text-muted">{c.num_classes ?? 0} aulas · {formatHours(c.workload)}</span>
                 <div className="flex gap-1">
                   <Link to={`/schedules/${c.id}/plan`} title="Planejar aulas" className="p-2 text-muted hover:text-accent hover:bg-accent/10 rounded-lg transition-colors">
                     <NotebookPen size={16} />

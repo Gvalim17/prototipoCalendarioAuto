@@ -178,3 +178,30 @@ def test_resolve_conflicts_adds_replacement_date():
         date(2026, 10, 19),
         date(2026, 10, 26),
     ]
+
+
+# ── Aviso não-bloqueante: aula na véspera/dia seguinte a um feriado ─────────
+
+def test_find_holiday_adjacency_warnings_detects_day_before_and_after():
+    holidays = {
+        date(2026, 9, 7): "Independência do Brasil",
+        date(2026, 11, 2): "Finados",
+    }
+    dates = [
+        date(2026, 9, 8),   # dia seguinte ao feriado de 7/9
+        date(2026, 11, 1),  # véspera do feriado de 2/11
+        date(2026, 9, 15),  # sem feriado por perto
+    ]
+    warnings = ScheduleGeneratorService.find_holiday_adjacency_warnings(dates, holidays)
+    assert len(warnings) == 2
+    by_date = {w["date"]: w for w in warnings}
+    assert by_date[date(2026, 9, 8)]["position"] == "day_before"
+    assert by_date[date(2026, 9, 8)]["holiday_description"] == "Independência do Brasil"
+    assert by_date[date(2026, 11, 1)]["position"] == "day_after"
+    assert by_date[date(2026, 11, 1)]["holiday_description"] == "Finados"
+
+
+def test_find_holiday_adjacency_warnings_empty_when_no_holidays_nearby():
+    holidays = {date(2026, 1, 1): "Confraternização Universal"}
+    dates = [date(2026, 6, 10), date(2026, 6, 17)]
+    assert ScheduleGeneratorService.find_holiday_adjacency_warnings(dates, holidays) == []

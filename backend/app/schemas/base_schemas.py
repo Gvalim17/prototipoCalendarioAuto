@@ -24,6 +24,7 @@ class CourseCreate(CourseBase):
 
 class CourseRead(CourseBase):
     id: int
+    owner_id: Optional[int] = None
     modules: List['ModuleRead'] = []
     class Config:
         from_attributes = True
@@ -117,6 +118,7 @@ class ScheduleConfigBase(BaseModel):
     start_time: Optional[time] = None
     end_time: Optional[time] = None
     holiday_policy: HolidayPolicy = HolidayPolicy.RESCHEDULE
+    event_title: Optional[str] = Field(None, max_length=200)
 
     @field_validator("days_of_week")
     @classmethod
@@ -151,6 +153,15 @@ class SkippedDate(BaseModel):
     reason: str
     suggested_date: Optional[date] = None
 
+class HolidayAdjacencyWarning(BaseModel):
+    """Aviso não-bloqueante: a aula em `date` cai na véspera ou no dia
+    seguinte a um feriado (`adjacent_date`) — o professor pode preferir
+    remarcar por conta própria, mas a data não é impedida."""
+    date: date
+    adjacent_date: date
+    position: Literal["day_before", "day_after"]
+    holiday_description: str
+
 class ConflictResolution(BaseModel):
     original_date: date
     action: Literal["auto", "manual", "recalculate"]
@@ -165,6 +176,7 @@ class ResolvedScheduleResponse(BaseModel):
     config: ScheduleConfigBase
     num_classes: int = 0
     total_workload: float = 0.0
+    holiday_warnings: List[HolidayAdjacencyWarning] = []
 
 class ScheduleResponse(BaseModel):
     dates: List[date]
@@ -172,6 +184,7 @@ class ScheduleResponse(BaseModel):
     config: ScheduleConfigBase
     num_classes: int = 0
     total_workload: float = 0.0
+    holiday_warnings: List[HolidayAdjacencyWarning] = []
 
 # --- Persistence ---
 class ScheduledClassCreate(BaseModel):
@@ -227,6 +240,7 @@ class CalendarEventRead(BaseModel):
     academic_level: Optional[str] = None
     academic_level_label: Optional[str] = None
     discipline_name: str
+    event_title: Optional[str] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None
     color: Optional[str] = None

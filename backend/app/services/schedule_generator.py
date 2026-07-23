@@ -69,7 +69,7 @@ class ScheduleGeneratorService:
         generated_dates: List[date] = []
         skipped_dates: List[dict] = []
 
-        # Evento único (Masterclass / palestra)
+        # Evento único (palestra, encontro avulso, etc.)
         if config.recurrence == RecurrenceType.NA:
             d = config.start_date
             reason = cls._blocked_reason(d, holidays, recesses)
@@ -114,3 +114,24 @@ class ScheduleGeneratorService:
             current += timedelta(days=1)
 
         return {"dates": generated_dates, "skipped": skipped_dates}
+
+    @staticmethod
+    def find_holiday_adjacency_warnings(dates: List[date], holidays: dict) -> List[dict]:
+        """Avisa (sem bloquear) quando uma aula cai na véspera ou no dia
+        seguinte a um feriado — não impede a data, só alerta o professor para
+        uma possível falta maior de alunos e a chance de precisar remarcar."""
+        warnings: List[dict] = []
+        for d in dates:
+            day_before = d - timedelta(days=1)
+            day_after = d + timedelta(days=1)
+            if day_before in holidays:
+                warnings.append({
+                    "date": d, "adjacent_date": day_before, "position": "day_before",
+                    "holiday_description": holidays[day_before],
+                })
+            if day_after in holidays:
+                warnings.append({
+                    "date": d, "adjacent_date": day_after, "position": "day_after",
+                    "holiday_description": holidays[day_after],
+                })
+        return warnings

@@ -73,9 +73,9 @@ def get_course_or_404(db: Session, course_id: int) -> Course:
     return course
 
 
-def ensure_owner_or_admin(owner_id: int | None, user: User) -> None:
+def ensure_owner_or_admin(owner_id: int | None, user: User, resource: str = "Este cronograma") -> None:
     if owner_id is not None and owner_id != user.id and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Este cronograma pertence a outro professor.")
+        raise HTTPException(status_code=403, detail=f"{resource} pertence a outro professor.")
 
 
 def get_module_or_404(db: Session, module_id: int) -> Module:
@@ -92,8 +92,8 @@ def get_discipline_or_404(db: Session, discipline_id: int) -> Discipline:
     return discipline
 
 
-def validate_schedule_references(db: Session, config: ScheduleConfigBase) -> None:
-    get_course_or_404(db, config.course_id)
+def validate_schedule_references(db: Session, config: ScheduleConfigBase, user: User) -> None:
+    course = get_course_or_404(db, config.course_id)
     module = get_module_or_404(db, config.module_id)
     discipline = get_discipline_or_404(db, config.discipline_id)
 
@@ -101,3 +101,7 @@ def validate_schedule_references(db: Session, config: ScheduleConfigBase) -> Non
         raise HTTPException(status_code=422, detail="O módulo informado não pertence ao curso selecionado.")
     if discipline.module_id != config.module_id:
         raise HTTPException(status_code=422, detail="A disciplina informada não pertence ao módulo selecionado.")
+
+    # Cursos/módulos/disciplinas são isolados por professor — não é possível
+    # gerar cronograma referenciando o catálogo de outro professor.
+    ensure_owner_or_admin(course.owner_id, user, resource="Este curso")

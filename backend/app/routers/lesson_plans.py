@@ -1,14 +1,13 @@
 from datetime import datetime, timezone
-from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..dependencies import get_current_user, get_discipline_or_404
+from ..dependencies import ensure_owner_or_admin, get_current_user, get_discipline_or_404
 from ..logging_config import get_logger
-from ..models.base import LessonAttachment, LessonPlan, LessonScript, ScheduledClass, User
+from ..models.base import Discipline, LessonAttachment, LessonPlan, LessonScript, ScheduledClass, User
 from ..schemas.lesson_schemas import (
     LessonPlanRead,
     LessonPlanUpdate,
@@ -36,6 +35,26 @@ def _get_scheduled_class_or_404(db: Session, scheduled_class_id: int) -> Schedul
     return lesson
 
 
+def _get_owned_discipline(db: Session, discipline_id: int, user: User) -> Discipline:
+    discipline = get_discipline_or_404(db, discipline_id)
+    ensure_owner_or_admin(discipline.owner_id, user, resource="Esta disciplina")
+    return discipline
+
+
+def _get_owned_scheduled_class(db: Session, scheduled_class_id: int, user: User) -> ScheduledClass:
+    lesson = _get_scheduled_class_or_404(db, scheduled_class_id)
+    ensure_owner_or_admin(lesson.config.owner_id, user, resource="Esta aula")
+    return lesson
+
+
+def _get_owned_attachment(db: Session, attachment_id: int, user: User) -> LessonAttachment:
+    attachment = db.query(LessonAttachment).filter(LessonAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    ensure_owner_or_admin(attachment.lesson_script.scheduled_class.config.owner_id, user, resource="Este anexo")
+    return attachment
+
+
 def _get_or_default_plan(db: Session, discipline_id: int) -> LessonPlan | dict:
     plan = db.query(LessonPlan).filter(LessonPlan.discipline_id == discipline_id).first()
     if plan:
@@ -50,8 +69,8 @@ def _get_or_default_plan(db: Session, discipline_id: int) -> LessonPlan | dict:
 
 # --- PTD (por disciplina) ---
 @router.get("/disciplines/{discipline_id}/lesson-plan", response_model=LessonPlanRead)
-def get_lesson_plan(discipline_id: int, db: Session = Depends(get_db)):
-    get_discipline_or_404(db, discipline_id)
+def get_lesson_plan(discipline_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _get_owned_discipline(db, discipline_id, user)
     return _get_or_default_plan(db, discipline_id)
 
 
@@ -60,7 +79,7 @@ def upsert_lesson_plan(
     discipline_id: int, payload: LessonPlanUpdate,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
-    get_discipline_or_404(db, discipline_id)
+    _get_owned_discipline(db, discipline_id, user)
     plan = db.query(LessonPlan).filter(LessonPlan.discipline_id == discipline_id).first()
     now = _now()
     if not plan:
@@ -77,8 +96,8 @@ def upsert_lesson_plan(
 
 
 @router.get("/disciplines/{discipline_id}/lesson-plan/export.docx")
-def export_lesson_plan_docx(discipline_id: int, db: Session = Depends(get_db)):
-    discipline = get_discipline_or_404(db, discipline_id)
+def export_lesson_plan_docx(discipline_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    discipline = _get_owned_discipline(db, discipline_id, user)
     plan = db.query(LessonPlan).filter(LessonPlan.discipline_id == discipline_id).first()
     buffer = render_lesson_plan_docx(discipline.name, plan)
     filename = f"PTD_{discipline.code}.docx"
@@ -90,8 +109,8 @@ def export_lesson_plan_docx(discipline_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/disciplines/{discipline_id}/lesson-plan/export.pdf")
-def export_lesson_plan_pdf(discipline_id: int, db: Session = Depends(get_db)):
-    discipline = get_discipline_or_404(db, discipline_id)
+def export_lesson_plan_pdf(discipline_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    discipline = _get_owned_discipline(db, discipline_id, user)
     plan = db.query(LessonPlan).filter(LessonPlan.discipline_id == discipline_id).first()
     buffer = render_lesson_plan_pdf(discipline.name, plan)
     filename = f"PTD_{discipline.code}.pdf"
@@ -114,8 +133,8 @@ def _get_or_default_script(db: Session, scheduled_class_id: int) -> LessonScript
 
 
 @router.get("/lessons/{scheduled_class_id}/script", response_model=LessonScriptRead)
-def get_lesson_script(scheduled_class_id: int, db: Session = Depends(get_db)):
-    _get_scheduled_class_or_404(db, scheduled_class_id)
+def get_lesson_script(scheduled_class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _get_owned_scheduled_class(db, scheduled_class_id, user)
     return _get_or_default_script(db, scheduled_class_id)
 
 
@@ -124,7 +143,7 @@ def upsert_lesson_script(
     scheduled_class_id: int, payload: LessonScriptUpdate,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
-    _get_scheduled_class_or_404(db, scheduled_class_id)
+    _get_owned_scheduled_class(db, scheduled_class_id, user)
     script = db.query(LessonScript).filter(LessonScript.scheduled_class_id == scheduled_class_id).first()
     now = _now()
     if not script:
@@ -154,7 +173,7 @@ async def upload_lesson_attachment(
     scheduled_class_id: int, file: UploadFile = File(...),
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
-    _get_scheduled_class_or_404(db, scheduled_class_id)
+    _get_owned_scheduled_class(db, scheduled_class_id, user)
     script = _get_or_create_script(db, scheduled_class_id, user)
 
     existing_count = db.query(LessonAttachment).filter(LessonAttachment.lesson_script_id == script.id).count()
@@ -182,10 +201,8 @@ async def upload_lesson_attachment(
 
 
 @router.get("/lesson-attachments/{attachment_id}/download")
-def download_lesson_attachment(attachment_id: int, db: Session = Depends(get_db)):
-    attachment = db.query(LessonAttachment).filter(LessonAttachment.id == attachment_id).first()
-    if not attachment:
-        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+def download_lesson_attachment(attachment_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    attachment = _get_owned_attachment(db, attachment_id, user)
     return Response(
         attachment.data, media_type=attachment.content_type,
         headers={"Content-Disposition": f'attachment; filename="{attachment.filename}"'},
@@ -194,9 +211,7 @@ def download_lesson_attachment(attachment_id: int, db: Session = Depends(get_db)
 
 @router.delete("/lesson-attachments/{attachment_id}", status_code=204)
 def delete_lesson_attachment(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    attachment = db.query(LessonAttachment).filter(LessonAttachment.id == attachment_id).first()
-    if not attachment:
-        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    attachment = _get_owned_attachment(db, attachment_id, user)
     db.delete(attachment)
     db.commit()
     logger.info(f"Anexo removido: id={attachment_id}", extra={"event": "lesson_attachment_deleted", "actor_id": user.id, "outcome": "success"})

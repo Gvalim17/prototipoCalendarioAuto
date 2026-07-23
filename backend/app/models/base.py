@@ -129,32 +129,41 @@ class AlertNotification(Base):
 # (o nível "Módulo" é opcional na UI para graduações que não o utilizam)
 class Course(Base):
     __tablename__ = "courses"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_courses_owner_name"),)
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
     institution = Column(String, nullable=True)
     academic_level = Column(Enum(AcademicLevel), nullable=False, default=AcademicLevel.MBA)
     academic_level_other = Column(String, nullable=True)  # rótulo livre quando academic_level == OUTRO
     description = Column(String)
     year = Column(Integer, default=2026)
     semester = Column(Integer, nullable=True)  # 1 ou 2, quando houver
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
+    owner = relationship("User")
 
 class Module(Base):
     __tablename__ = "modules"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    # Denormalizado a partir de course.owner_id na criação — evita join extra
+    # em toda checagem de posse/listagem, no mesmo padrão do owner_id em
+    # ScheduleConfig/LessonPlan/LessonScript.
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     course = relationship("Course", back_populates="modules")
     disciplines = relationship("Discipline", back_populates="module", cascade="all, delete-orphan")
 
 class Discipline(Base):
     __tablename__ = "disciplines"
+    __table_args__ = (UniqueConstraint("owner_id", "code", name="uq_disciplines_owner_code"),)
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    code = Column(String, unique=True, nullable=False)  # Sigla ou código da disciplina
+    code = Column(String, nullable=False)  # Sigla ou código da disciplina
     module_id = Column(Integer, ForeignKey("modules.id"), nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     module = relationship("Module", back_populates="disciplines")
 
@@ -193,6 +202,7 @@ class ScheduleConfig(Base):
     holiday_policy = Column(Enum(HolidayPolicy), nullable=False, default=HolidayPolicy.RESCHEDULE)
     workload = Column(Integer, nullable=True)      # Carga horária total (derivada)
     num_classes = Column(Integer, nullable=True)   # Quantidade de aulas (derivada)
+    event_title = Column(String, nullable=True)    # Nome livre do evento (só para recurrence=NA, "Evento único")
 
     # Relacionamentos para facilitar consultas
     course = relationship("Course")

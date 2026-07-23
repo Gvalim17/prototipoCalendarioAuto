@@ -3,7 +3,10 @@ disciplina, roteiro por aula, anexos e o link de assinatura de calendário."""
 
 from datetime import date, time
 
+from fastapi.testclient import TestClient
+
 from app.database import SessionLocal
+from app.main import app
 from app.models.base import (
     AcademicLevel, Course, DeliveryFormat, Discipline, HolidayPolicy,
     Module, RecurrenceType, ScheduleConfig, ScheduledClass,
@@ -20,6 +23,39 @@ def _register(client, email="prof-plan@example.com"):
         "name": "Professora Plan", "email": email,
         "password": "senha-super-longa-123456", "privacy_consent": True,
     })
+
+
+def _register_get_id(client, email):
+    return _register(client, email).json()["id"]
+
+
+def _seed_owned_lesson(owner_id, email):
+    """Igual a `_seed_lesson`, mas com owner_id preenchido em curso, módulo,
+    disciplina e cronograma — simula um catálogo já isolado por professor."""
+    db = SessionLocal()
+    try:
+        course = Course(name=f"Curso Owned {email}", academic_level=AcademicLevel.MBA, year=2026, owner_id=owner_id)
+        db.add(course)
+        db.flush()
+        module = Module(name="Módulo 1", course_id=course.id, owner_id=owner_id)
+        db.add(module)
+        db.flush()
+        discipline = Discipline(name="Disciplina Teste", code=f"D-owned-{email}", module_id=module.id, owner_id=owner_id)
+        db.add(discipline)
+        db.flush()
+        config = ScheduleConfig(
+            course_id=course.id, module_id=module.id, discipline_id=discipline.id, owner_id=owner_id,
+            format=DeliveryFormat.PRESENCIAL, start_date=date(2026, 10, 5), recurrence=RecurrenceType.NA,
+            start_time=time(19, 0), end_time=time(22, 0), holiday_policy=HolidayPolicy.RESCHEDULE,
+        )
+        db.add(config)
+        db.flush()
+        lesson = ScheduledClass(config_id=config.id, date=date(2026, 10, 5), order=1)
+        db.add(lesson)
+        db.commit()
+        return discipline.id, lesson.id
+    finally:
+        db.close()
 
 
 def _seed_lesson(email="prof-plan@example.com"):
@@ -229,3 +265,57 @@ def test_rotating_calendar_token_invalidates_the_previous_one(client):
     client.post("/alerts/calendar-token/rotate", headers=_csrf_headers(client))
 
     assert client.get(f"/calendar/calendar.ics?token={first}").status_code == 404
+
+
+# ── Isolamento entre professores (PTD, roteiro e anexos) ─────────────────────
+
+def test_professor_cannot_read_or_write_another_professors_lesson_plan(client):
+    owner_id = _register_get_id(client, "dono-ptd@example.com")
+    discipline_id, _ = _seed_owned_lesson(owner_id, "dono-ptd@example.com")
+
+    intruder = TestClient(app)
+    _register(intruder, "intruso-ptd@example.com")
+
+    assert intruder.get(f"/disciplines/{discipline_id}/lesson-plan").status_code == 403
+    assert intruder.put(
+        f"/disciplines/{discipline_id}/lesson-plan", headers=_csrf_headers(intruder), json={"ementa": "invadido"},
+    ).status_code == 403
+    assert intruder.get(f"/disciplines/{discipline_id}/lesson-plan/export.docx").status_code == 403
+    assert intruder.get(f"/disciplines/{discipline_id}/lesson-plan/export.pdf").status_code == 403
+
+
+def test_professor_cannot_read_or_write_another_professors_lesson_script(client):
+    owner_id = _register_get_id(client, "dono-roteiro@example.com")
+    _, lesson_id = _seed_owned_lesson(owner_id, "dono-roteiro@example.com")
+
+    intruder = TestClient(app)
+    _register(intruder, "intruso-roteiro@example.com")
+
+    assert intruder.get(f"/lessons/{lesson_id}/script").status_code == 403
+    assert intruder.put(
+        f"/lessons/{lesson_id}/script", headers=_csrf_headers(intruder), json={"topic": "invadido", "content": "x"},
+    ).status_code == 403
+    assert intruder.post(
+        f"/lessons/{lesson_id}/script/attachments", headers=_csrf_headers(intruder),
+        files={"file": ("teste.txt", b"conteudo", "text/plain")},
+    ).status_code == 403
+
+
+def test_professor_cannot_download_or_delete_another_professors_attachment(client):
+    owner_id = _register_get_id(client, "dono-anexo@example.com")
+    _, lesson_id = _seed_owned_lesson(owner_id, "dono-anexo@example.com")
+    upload = client.post(
+        f"/lessons/{lesson_id}/script/attachments", headers=_csrf_headers(client),
+        files={"file": ("teste.txt", b"conteudo", "text/plain")},
+    )
+    assert upload.status_code == 201
+    attachment_id = upload.json()["attachments"][0]["id"]
+
+    intruder = TestClient(app)
+    _register(intruder, "intruso-anexo@example.com")
+
+    assert intruder.get(f"/lesson-attachments/{attachment_id}/download").status_code == 403
+    assert intruder.delete(f"/lesson-attachments/{attachment_id}", headers=_csrf_headers(intruder)).status_code == 403
+
+    # o dono continua acessando normalmente
+    assert client.get(f"/lesson-attachments/{attachment_id}/download").status_code == 200
