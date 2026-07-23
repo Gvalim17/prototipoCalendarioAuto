@@ -156,6 +156,9 @@ O arquivo exportado contém as colunas: MBA, Módulo, Disciplina, Formato, Data,
 | `npm run dev:front` | Sobe apenas o frontend |
 | `npm run install:all` | Instala dependências Node e cria o `.venv` Python |
 | `npm run setup:back` | Instala pacotes Python no `.venv` (requer `.venv` ativo) |
+| `npm run migrate:back` | Aplica migrações Alembic no backend |
+
+Em produção, configure `AUTO_CREATE_TABLES=false` e execute `npm run migrate:back` no deploy. Para proteger endpoints destrutivos em massa, configure `ADMIN_ACTION_TOKEN`; quando definido, o backend exige o header `X-Admin-Action-Token`.
 
 ---
 

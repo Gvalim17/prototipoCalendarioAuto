@@ -1,7 +1,8 @@
 from datetime import date, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from ..models.base import Holiday, Recess, ScheduleConfig, RecurrenceType
+from ..models.base import Holiday, Recess, ScheduleConfig, RecurrenceType, HolidayPolicy
+
 
 class ScheduleGeneratorService:
     @staticmethod
@@ -12,6 +13,15 @@ class ScheduleGeneratorService:
             if r_start <= check_date <= r_end:
                 return True
         return False
+
+    @staticmethod
+    def _blocked_reason(check_date: date, holidays: dict, recesses: List[tuple]) -> Optional[str]:
+        if check_date in holidays:
+            return f"Feriado: {holidays[check_date]}"
+        for r_start, r_end, desc in recesses:
+            if r_start <= check_date <= r_end:
+                return f"Recesso: {desc or 'Recesso'}"
+        return None
 
     @classmethod
     def find_next_valid(cls, from_date: date, holidays: dict, recesses: List[tuple], max_search: int = 60) -> Optional[date]:
@@ -25,142 +35,82 @@ class ScheduleGeneratorService:
 
     @classmethod
     def resolve_conflicts(cls, db: Session, config: ScheduleConfig, resolutions: List[dict]) -> dict:
-        """
-        Recebe as configurações originais e uma lista de resoluções.
-        Suporta 'manual' (apenas substitui) e 'recalculate' (gera o resto a partir dali).
-        """
-        # 1. Obter o resultado base
+        """Gera o cronograma base e incorpora as datas de reposição informadas."""
         base_result = cls.generate_schedule(db, config)
-        current_dates = base_result["dates"]
-        
-        # Se não houver resoluções, retorna o base
-        if not resolutions:
-            return base_result
-
-        # Ordenar resoluções pela data original
-        resolutions.sort(key=lambda x: x["original_date"])
-        
-        # Para este protótipo, vamos considerar a primeira resolução que solicita recálculo
-        # como o ponto de re-geração.
-        recalc_resolution = next((r for r in resolutions if r.get("action") == "recalculate"), None)
-        
-        if recalc_resolution:
-            # Lógica de Recálculo em Cascata:
-            # 1. Manter as datas antes do conflito
-            pivot_date = recalc_resolution["original_date"]
-            fixed_dates = [d for d in current_dates if d < pivot_date]
-            
-            # 2. A nova data de reposição é a primeira do novo bloco
-            new_start = recalc_resolution["resolved_date"]
-            
-            # 3. Gerar o restante (quanta aulas faltam?)
-            remaining_count = config.num_classes - len(fixed_dates)
-            
-            new_config = ScheduleConfig(
-                start_date=new_start,
-                num_classes=remaining_count,
-                recurrence=config.recurrence,
-                day_of_week=new_start.weekday() # Ajusta para o dia da semana da nova data
-            )
-            
-            # Geramos o novo bloco a partir da data de reposição
-            new_block = cls.generate_schedule(db, new_config)
-            
-            return {
-                "dates": fixed_dates + new_block["dates"],
-                "skipped": new_block["skipped"] # Novos conflitos que podem surgir no novo bloco
-            }
-        
-        # Lógica: substituir suggested_date (já presente em current_dates) pela resolved_date escolhida
-        # Para action='auto': resolved_date == suggested_date, nothing changes
-        # Para action='manual': resolved_date != suggested_date, replace in-place
-        skipped_map = {s["date"]: s["suggested_date"] for s in base_result["skipped"]}
-        final_dates = list(current_dates)
+        dates = list(base_result["dates"])
 
         for r in resolutions:
-            original = r["original_date"]
-            resolved = r["resolved_date"]
-            suggested = skipped_map.get(original)
+            resolved = r.get("resolved_date")
+            if resolved:
+                dates.append(resolved)
 
-            if suggested is not None and suggested in final_dates:
-                # Replace the auto-suggested placeholder with the user's chosen date
-                idx = final_dates.index(suggested)
-                final_dates[idx] = resolved
-            elif resolved not in final_dates:
-                # No suggestion existed (find_next_valid returned None), add the chosen date
-                final_dates.append(resolved)
-
-        # Sort and deduplicate
+        # Ordena e remove duplicatas
         seen: set = set()
-        deduped = []
-        for d in sorted(final_dates):
-            if d not in seen:
-                seen.add(d)
-                deduped.append(d)
-
-        return {"dates": deduped, "skipped": []}
+        deduped = [d for d in sorted(dates) if not (d in seen or seen.add(d))]
+        return {"dates": deduped, "skipped": base_result["skipped"]}
 
     @classmethod
     def generate_schedule(cls, db: Session, config: ScheduleConfig) -> dict:
+        """Gera as datas de aula dentro da faixa [start_date, end_date] para os
+        dias da semana selecionados, respeitando a política de feriados.
+
+        - HolidayPolicy.SKIP: a aula que cair em feriado/recesso é perdida
+          (registrada em `skipped` sem sugestão) e o total é reduzido.
+        - HolidayPolicy.RESCHEDULE / MANUAL: a aula é retirada da lista e
+          registrada em `skipped` com uma `suggested_date` de referência para
+          reposição (fluxo interativo). A diferença entre as duas é apenas de
+          UX no frontend: RESCHEDULE pré-aceita a sugestão automaticamente,
+          MANUAL exige que o professor escolha a data manualmente.
+        """
         holidays = {h.date: h.description for h in db.query(Holiday).all()}
         recesses = [(r.start_date, r.end_date, r.description) for r in db.query(Recess).all()]
 
-        generated_dates = []
-        skipped_dates = []
-        current_date = config.start_date
+        policy = config.holiday_policy or HolidayPolicy.RESCHEDULE
+        generated_dates: List[date] = []
+        skipped_dates: List[dict] = []
 
+        # Evento único (Masterclass / palestra)
         if config.recurrence == RecurrenceType.NA:
-            is_holiday_desc = holidays.get(current_date)
-            recess_match = next(((s, e, desc) for s, e, desc in recesses if s <= current_date <= e), None)
-            recess_desc = recess_match[2] if recess_match else None
-
-            if is_holiday_desc:
-                suggested = cls.find_next_valid(current_date + timedelta(days=1), holidays, recesses)
-                skipped_dates.append({
-                    "date": current_date,
-                    "reason": f"Feriado: {is_holiday_desc}",
-                    "suggested_date": suggested
-                })
+            d = config.start_date
+            reason = cls._blocked_reason(d, holidays, recesses)
+            if reason:
+                if policy == HolidayPolicy.SKIP:
+                    skipped_dates.append({"date": d, "reason": reason, "suggested_date": None})
+                    return {"dates": [], "skipped": skipped_dates}
+                suggested = cls.find_next_valid(d + timedelta(days=1), holidays, recesses)
+                skipped_dates.append({"date": d, "reason": reason, "suggested_date": suggested})
                 return {"dates": [], "skipped": skipped_dates}
-            if recess_match:
-                suggested = cls.find_next_valid(current_date + timedelta(days=1), holidays, recesses)
-                skipped_dates.append({
-                    "date": current_date,
-                    "reason": f"Recesso: {recess_desc or 'Recesso'}",
-                    "suggested_date": suggested
-                })
-                return {"dates": [], "skipped": skipped_dates}
+            return {"dates": [d], "skipped": []}
 
-            return {"dates": [current_date], "skipped": []}
+        days_set = set(config.days_list)
+        if not days_set:
+            return {"dates": [], "skipped": []}
 
-        increment_days = 7 if config.recurrence == RecurrenceType.SEMANAL else 14
-        classes_count = 0
-        max_attempts = 1000
-        attempts = 0
+        end_date = config.end_date or config.start_date
+        # Âncora de paridade de semanas para recorrência quinzenal
+        anchor_monday = config.start_date - timedelta(days=config.start_date.weekday())
+        biweekly = config.recurrence == RecurrenceType.QUINZENAL
 
-        diff = (config.day_of_week - current_date.weekday() + 7) % 7
-        current_date += timedelta(days=diff)
-
-        while classes_count < config.num_classes and attempts < max_attempts:
-            attempts += 1
-
-            is_holiday_desc = holidays.get(current_date)
-            recess_match = next(((s, e, desc) for s, e, desc in recesses if s <= current_date <= e), None)
-
-            if is_holiday_desc or recess_match:
-                reason = f"Feriado: {is_holiday_desc}" if is_holiday_desc else f"Recesso: {recess_match[2] or 'Recesso'}"
-                next_occurrence = current_date + timedelta(days=increment_days)
-                suggested = cls.find_next_valid(next_occurrence, holidays, recesses)
-                skipped_dates.append({
-                    "date": current_date,
-                    "reason": reason,
-                    "suggested_date": suggested
-                })
-                current_date += timedelta(days=increment_days)
-                continue
-
-            generated_dates.append(current_date)
-            classes_count += 1
-            current_date += timedelta(days=increment_days)
+        current = config.start_date
+        while current <= end_date:
+            if current.weekday() in days_set:
+                include = True
+                if biweekly:
+                    weeks = (current - anchor_monday).days // 7
+                    include = weeks % 2 == 0
+                if include:
+                    reason = cls._blocked_reason(current, holidays, recesses)
+                    if reason:
+                        suggested = None
+                        if policy != HolidayPolicy.SKIP:
+                            suggested = cls.find_next_valid(current + timedelta(days=1), holidays, recesses)
+                        skipped_dates.append({
+                            "date": current,
+                            "reason": reason,
+                            "suggested_date": suggested,
+                        })
+                    else:
+                        generated_dates.append(current)
+            current += timedelta(days=1)
 
         return {"dates": generated_dates, "skipped": skipped_dates}

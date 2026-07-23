@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import axios from 'axios';
-import { AlertCircle, Calendar, CheckCircle2, FileText, Plus, Trash2, Info, Upload as UploadIcon, X } from 'lucide-react';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { ReactNode, useEffect, useRef, useState } from 'react';
+import api from '../api/client';
+import { AlertCircle, CalendarRange, CheckCircle2, FileText, Plus, Trash2, Info, Upload as UploadIcon, X } from 'lucide-react';
+import type { Holiday, Recess } from '../types/domain';
 
 interface HolidayImportResult {
   message: string;
@@ -16,16 +15,15 @@ interface HolidayImportResult {
 }
 
 const HolidayRecessList = () => {
-  const [holidays, setHolidays] = useState<any[]>([]);
-  const [recesses, setRecesses] = useState<any[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [recesses, setRecesses] = useState<Recess[]>([]);
   const [activeTab, setActiveTab] = useState<'holidays' | 'recesses'>('holidays');
   const [uploading, setUploading] = useState(false);
   const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<HolidayImportResult | null>(null);
-  const [importYear, setImportYear] = useState(2026);
+  const [importYear, setImportYear] = useState(new Date().getFullYear());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  
-  // Forms
+
   const [holidayForm, setHolidayForm] = useState({ date: '', description: '', type: 'nacional' });
   const [recessForm, setRecessForm] = useState({ start_date: '', end_date: '', description: '' });
 
@@ -35,22 +33,22 @@ const HolidayRecessList = () => {
 
   const fetchData = async () => {
     try {
-      const hRes = await axios.get(`${API_URL}/holidays/`);
+      const hRes = await api.get<Holiday[]>(`/holidays/`);
       setHolidays(hRes.data);
-      const rRes = await axios.get(`${API_URL}/recesses/`);
+      const rRes = await api.get<Recess[]>(`/recesses/`);
       setRecesses(rRes.data);
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Erro ao buscar dados:', error);
     }
   };
 
   const addHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await axios.post(`${API_URL}/holidays/`, { ...holidayForm, source: "UERJ" });
+      await api.post(`/holidays/`, { ...holidayForm, source: 'Institucional' });
       setHolidayForm({ date: '', description: '', type: 'nacional' });
       fetchData();
-    } catch (error) {
+    } catch {
       alert('Erro ao cadastrar feriado.');
     }
   };
@@ -58,11 +56,12 @@ const HolidayRecessList = () => {
   const addRecess = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await axios.post(`${API_URL}/recesses/`, { ...recessForm, source: "UERJ" });
+      await api.post(`/recesses/`, { ...recessForm, source: 'Institucional' });
       setRecessForm({ start_date: '', end_date: '', description: '' });
       fetchData();
     } catch (error) {
-      alert('Erro ao cadastrar recesso.');
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      alert(detail || 'Erro ao cadastrar recesso.');
     }
   };
 
@@ -78,297 +77,171 @@ const HolidayRecessList = () => {
     const formData = new FormData();
     formData.append('file', selectedImportFile);
     formData.append('year', String(importYear));
-
     try {
       setUploading(true);
-      const res = await axios.post(`${API_URL}/holidays/upload/`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      const res = await api.post(`/holidays/upload/`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImportResult(res.data);
       setSelectedImportFile(null);
       fetchData();
-    } catch (error: any) {
-      setImportResult({
-        message: error.response?.data?.detail || error.message || 'Erro ao importar arquivo.',
-        total: 0,
-        total_rows: 0,
-        created: 0,
-        updated: 0,
-        unchanged: 0,
-        failed: 1,
-        errors: []
-      });
+    } catch (error) {
+      const apiError = error as { response?: { data?: { detail?: string } }; message?: string };
+      const message = apiError.response?.data?.detail || apiError.message || 'Erro ao importar arquivo.';
+      setImportResult({ message, total: 0, total_rows: 0, created: 0, updated: 0, unchanged: 0, failed: 1, errors: [] });
     } finally {
       setUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const clearImportSelection = () => {
     setSelectedImportFile(null);
     setImportResult(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const deleteHoliday = async (id: number) => {
-    if (window.confirm("Remover este feriado da base 2026?")) {
-        try {
-            await axios.delete(`${API_URL}/holidays/${id}`);
-            fetchData();
-        } catch (err) { alert("Erro ao excluir feriado."); }
+    if (window.confirm('Remover este feriado?')) {
+      try { await api.delete(`/holidays/${id}`); fetchData(); } catch { alert('Erro ao excluir feriado.'); }
     }
   };
 
   const deleteRecess = async (id: number) => {
-    if (window.confirm("Remover este recesso institucional?")) {
-        try {
-            await axios.delete(`${API_URL}/recesses/${id}`);
-            fetchData();
-        } catch (err) { alert("Erro ao excluir recesso."); }
+    if (window.confirm('Remover este recesso?')) {
+      try { await api.delete(`/recesses/${id}`); fetchData(); } catch { alert('Erro ao excluir recesso.'); }
     }
   };
 
   const formatDateInfo = (dateStr: string) => {
-    // dateStr is YYYY-MM-DD
-    const parts = dateStr.split('-');
-    const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-    return {
-      day: parts[2],
-      month: date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
-      full: `${parts[2]}/${parts[1]}/${parts[0]}`
-    };
+    const [y, m, d] = dateStr.split('-');
+    const date = new Date(Number(y), Number(m) - 1, Number(d));
+    return { day: d, month: date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''), full: `${d}/${m}/${y}` };
   };
 
   const deleteAll = async () => {
     const type = activeTab === 'holidays' ? 'feriados' : 'recessos';
-    if (window.confirm(`ATENÇÃO: Deseja apagar TODOS os ${type}? Esta ação não pode ser desfeita.`)) {
-        if (window.confirm(`Você tem CERTEZA absoluta? Isso removerá todos os ${type} da base de dados.`)) {
-            try {
-                await axios.delete(`${API_URL}/${activeTab}/all`);
-                fetchData();
-            } catch (err) { alert(`Erro ao limpar ${type}.`); }
-        }
+    if (window.confirm(`Apagar TODOS os ${type}? Esta ação não pode ser desfeita.`)) {
+      try { await api.delete(`/${activeTab}/all`); fetchData(); } catch { alert(`Erro ao limpar ${type}.`); }
     }
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-700 pb-20">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-        <div>
-          <h2 className="text-3xl font-black text-white tracking-tighter uppercase">Calendário Institucional</h2>
-          <p className="text-slate-400 mt-2 font-medium">Controle de feriados e recessos acadêmicos 2026.</p>
-        </div>
+    <div className="max-w-6xl mx-auto space-y-6">
+      <div>
+        <h2 className="text-2xl font-semibold text-ink tracking-tight">Feriados & Recessos</h2>
+        <p className="text-muted mt-1 text-sm">Datas bloqueadas automaticamente na geração de cronogramas.</p>
       </div>
 
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex gap-2 p-1 bg-slate-900/50 border border-slate-800 rounded-2xl w-fit">
-          <button 
-            onClick={() => setActiveTab('holidays')}
-            className={`px-8 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
-              activeTab === 'holidays' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            Feriados Oficiais
-          </button>
-          <button 
-            onClick={() => setActiveTab('recesses')}
-            className={`px-8 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
-              activeTab === 'recesses' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            Recessos Institucionais
-          </button>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex gap-1 p-1 bg-surface-2 border border-line rounded-xl w-fit">
+          {(['holidays', 'recesses'] as const).map((t) => (
+            <button key={t} onClick={() => setActiveTab(t)}
+              className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === t ? 'bg-accent text-accent-fg' : 'text-muted hover:text-ink'}`}>
+              {t === 'holidays' ? 'Feriados' : 'Recessos'}
+            </button>
+          ))}
         </div>
-
-        <button 
-            onClick={deleteAll}
-            className="flex items-center gap-2 px-6 py-3 rounded-xl border border-red-500/20 text-red-500/60 hover:text-red-500 hover:bg-red-500/10 hover:border-red-500/50 transition-all font-black text-[10px] uppercase tracking-widest"
-        >
-            <Trash2 size={16} />
-            Limpar Base
-        </button>
+        <button onClick={deleteAll} className="btn-danger"><Trash2 size={15} /> Limpar base</button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Formulário lateral */}
-        <div className="lg:col-span-1 space-y-6">
-          <div className="glass p-8 rounded-[40px] border border-slate-800 shadow-2xl space-y-8 bg-gradient-to-br from-blue-600/5 to-transparent">
-            <h3 className="text-lg font-black text-white flex items-center gap-2 uppercase tracking-tighter">
-              <Plus size={24} className="text-blue-500" />
-              {activeTab === 'holidays' ? 'Novo Feriado' : 'Novo Recesso'}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-1 space-y-4">
+          <div className="card p-6 space-y-4">
+            <h3 className="text-base font-semibold text-ink flex items-center gap-2">
+              <Plus size={18} className="text-accent" /> {activeTab === 'holidays' ? 'Novo feriado' : 'Novo recesso'}
             </h3>
-            
+
             {activeTab === 'holidays' ? (
-              <form onSubmit={addHoliday} className="space-y-6">
-                <FormGroup label="Data do Evento">
-                  <input 
-                    required type="date"
-                    className="input-custom"
-                    value={holidayForm.date}
-                    onChange={(e) => setHolidayForm({...holidayForm, date: e.target.value})}
-                  />
+              <form onSubmit={addHoliday} className="space-y-4">
+                <FormGroup label="Data">
+                  <input required type="date" className="input-custom" value={holidayForm.date}
+                    onChange={(e) => setHolidayForm({ ...holidayForm, date: e.target.value })} />
                 </FormGroup>
-                <FormGroup label="Descrição / Nome">
-                  <input 
-                    required type="text" placeholder="Ex: Dia do Mestre"
-                    className="input-custom"
-                    value={holidayForm.description}
-                    onChange={(e) => setHolidayForm({...holidayForm, description: e.target.value})}
-                  />
+                <FormGroup label="Descrição">
+                  <input required type="text" placeholder="Ex: Dia do Professor" className="input-custom" value={holidayForm.description}
+                    onChange={(e) => setHolidayForm({ ...holidayForm, description: e.target.value })} />
                 </FormGroup>
                 <FormGroup label="Tipo">
-                  <select 
-                    className="select-custom"
-                    value={holidayForm.type}
-                    onChange={(e) => setHolidayForm({...holidayForm, type: e.target.value})}
-                  >
+                  <select className="select-custom" value={holidayForm.type} onChange={(e) => setHolidayForm({ ...holidayForm, type: e.target.value })}>
                     <option value="nacional">Nacional</option>
                     <option value="estadual">Estadual</option>
-                    <option value="uerj">UERJ / Municipal</option>
+                    <option value="municipal">Municipal</option>
+                    <option value="institucional">Institucional</option>
                   </select>
                 </FormGroup>
-                <button type="submit" className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-500/30 uppercase tracking-tighter">
-                  Registrar Feriado
-                </button>
+                <button type="submit" className="btn-primary w-full h-12">Registrar feriado</button>
               </form>
             ) : (
-              <form onSubmit={addRecess} className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
+              <form onSubmit={addRecess} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
                   <FormGroup label="Início">
-                    <input 
-                      required type="date"
-                      className="input-custom"
-                      value={recessForm.start_date}
-                      onChange={(e) => setRecessForm({...recessForm, start_date: e.target.value})}
-                    />
+                    <input required type="date" className="input-custom" value={recessForm.start_date}
+                      onChange={(e) => setRecessForm({ ...recessForm, start_date: e.target.value })} />
                   </FormGroup>
                   <FormGroup label="Fim">
-                    <input 
-                      required type="date"
-                      className="input-custom"
-                      value={recessForm.end_date}
-                      onChange={(e) => setRecessForm({...recessForm, end_date: e.target.value})}
-                    />
+                    <input required type="date" className="input-custom" value={recessForm.end_date}
+                      onChange={(e) => setRecessForm({ ...recessForm, end_date: e.target.value })} />
                   </FormGroup>
                 </div>
                 <FormGroup label="Descrição">
-                  <input 
-                    required type="text" placeholder="Ex: Recesso de Natal"
-                    className="input-custom"
-                    value={recessForm.description}
-                    onChange={(e) => setRecessForm({...recessForm, description: e.target.value})}
-                  />
+                  <input required type="text" placeholder="Ex: Recesso de fim de ano" className="input-custom" value={recessForm.description}
+                    onChange={(e) => setRecessForm({ ...recessForm, description: e.target.value })} />
                 </FormGroup>
-                <button type="submit" className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-500/30 uppercase tracking-tighter">
-                  Registrar Recesso
-                </button>
+                <button type="submit" className="btn-primary w-full h-12">Registrar recesso</button>
               </form>
             )}
           </div>
 
           {activeTab === 'holidays' && (
-            <div className="glass p-6 rounded-3xl border border-slate-800 bg-blue-500/5 space-y-5">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 flex items-center justify-center shrink-0">
-                  <UploadIcon size={24} />
-                </div>
-                <div className="text-left min-w-0">
-                  <h4 className="text-white font-black text-xs uppercase">Importar Feriados</h4>
-                  <p className="text-[10px] text-slate-500 mt-1 font-bold leading-relaxed">
-                    CSV com Data, Feriado, Esfera, Tipo e Observações. Datas DD/MM e Data móvel usam o ano abaixo.
-                  </p>
+            <div className="card p-6 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-accent/10 text-accent flex items-center justify-center shrink-0"><UploadIcon size={20} /></div>
+                <div>
+                  <h4 className="text-ink font-medium text-sm">Importar feriados</h4>
+                  <p className="text-xs text-muted mt-0.5">CSV/XLSX com Data, Feriado, Esfera, Tipo. Datas DD/MM usam o ano abaixo.</p>
                 </div>
               </div>
 
-              <input 
-                ref={fileInputRef}
-                type="file" 
-                accept=".csv, .xlsx, .xls"
-                className="hidden" 
-                onChange={handleFileSelect}
-                disabled={uploading}
-              />
+              <input ref={fileInputRef} type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileSelect} disabled={uploading} />
 
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 space-y-3">
-                <div className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                  <FileText size={14} />
-                  Modelo esperado
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
-                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-300 border border-slate-800">Data</span>
-                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-300 border border-slate-800">Feriado</span>
-                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-500 border border-slate-800">Esfera</span>
-                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-500 border border-slate-800">Tipo</span>
-                  <span className="rounded-lg bg-slate-900 px-2 py-1 text-slate-500 border border-slate-800 col-span-2">Observações</span>
+              <div className="rounded-lg border border-line bg-surface-2 p-3 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-medium text-muted"><FileText size={13} /> Modelo esperado</div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {['Data', 'Feriado', 'Esfera', 'Tipo'].map((c) => (
+                    <span key={c} className="rounded bg-surface px-2 py-1 text-muted border border-line">{c}</span>
+                  ))}
                 </div>
               </div>
 
-              <FormGroup label="Ano de Referência">
-                <input
-                  type="number"
-                  min={1900}
-                  max={2200}
-                  className="input-custom"
-                  value={importYear}
-                  onChange={(e) => setImportYear(Number(e.target.value) || 2026)}
-                />
+              <FormGroup label="Ano de referência">
+                <input type="number" min={1900} max={2200} className="input-custom" value={importYear}
+                  onChange={(e) => setImportYear(Number(e.target.value) || new Date().getFullYear())} />
               </FormGroup>
 
               {selectedImportFile ? (
-                <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 text-left">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-black text-white truncate">{selectedImportFile.name}</p>
-                      <p className="text-[10px] text-blue-300 font-bold mt-1">
-                        {(selectedImportFile.size / 1024).toFixed(1)} KB selecionado
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={clearImportSelection}
-                      className="p-2 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-all"
-                    >
-                      <X size={16} />
-                    </button>
+                <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink truncate">{selectedImportFile.name}</p>
+                    <p className="text-xs text-muted mt-0.5">{(selectedImportFile.size / 1024).toFixed(1)} KB</p>
                   </div>
+                  <button type="button" onClick={clearImportSelection} className="p-1.5 rounded text-muted hover:text-ink"><X size={15} /></button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="w-full h-12 rounded-2xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-blue-500/50 hover:bg-blue-500/10 transition-all font-black text-[10px] uppercase tracking-widest"
-                >
+                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                  className="w-full h-11 rounded-lg border border-dashed border-line text-muted hover:text-ink hover:border-accent/50 transition-colors text-sm font-medium">
                   Selecionar arquivo
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={importSelectedFile}
-                disabled={!selectedImportFile || uploading}
-                className="w-full h-12 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-800 disabled:text-slate-600 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-500/20 uppercase tracking-tighter"
-              >
-                {uploading ? 'Importando...' : 'Importar e Atualizar Base'}
+              <button type="button" onClick={importSelectedFile} disabled={!selectedImportFile || uploading} className="btn-primary w-full h-11">
+                {uploading ? 'Importando...' : 'Importar e atualizar'}
               </button>
 
               {importResult && (
-                <div className={`rounded-2xl border p-4 text-left space-y-3 ${
-                  importResult.failed > 0 ? 'border-amber-500/30 bg-amber-500/10' : 'border-emerald-500/30 bg-emerald-500/10'
-                }`}>
+                <div className={`rounded-lg border p-3 space-y-3 ${importResult.failed > 0 ? 'border-warn/30 bg-warn/5' : 'border-ok/30 bg-ok/5'}`}>
                   <div className="flex items-start gap-2">
-                    {importResult.failed > 0 ? (
-                      <AlertCircle size={18} className="text-amber-400 shrink-0 mt-0.5" />
-                    ) : (
-                      <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-0.5" />
-                    )}
-                    <p className="text-xs font-bold text-slate-200 leading-relaxed">{importResult.message}</p>
+                    {importResult.failed > 0 ? <AlertCircle size={17} className="text-warn shrink-0 mt-0.5" /> : <CheckCircle2 size={17} className="text-ok shrink-0 mt-0.5" />}
+                    <p className="text-sm text-ink">{importResult.message}</p>
                   </div>
-
                   {importResult.total_rows > 0 && (
                     <div className="grid grid-cols-4 gap-2 text-center">
                       <ImportStat label="Criados" value={importResult.created} />
@@ -377,11 +250,10 @@ const HolidayRecessList = () => {
                       <ImportStat label="Erros" value={importResult.failed} />
                     </div>
                   )}
-
                   {importResult.errors.length > 0 && (
-                    <div className="space-y-2 max-h-36 overflow-y-auto custom-scrollbar pr-1">
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar">
                       {importResult.errors.map((err, idx) => (
-                        <div key={`${err.row}-${err.field}-${idx}`} className="text-[10px] text-amber-200 bg-slate-950/50 border border-amber-500/20 rounded-xl px-3 py-2">
+                        <div key={`${err.row}-${err.field}-${idx}`} className="text-xs text-warn bg-surface-2 border border-warn/20 rounded px-2 py-1.5">
                           Linha {err.row}, {err.field}: {err.message}
                         </div>
                       ))}
@@ -392,78 +264,55 @@ const HolidayRecessList = () => {
             </div>
           )}
 
-          <div className="glass p-6 rounded-3xl border border-slate-800 bg-amber-500/5">
-             <div className="flex items-center gap-2 text-amber-500 mb-3">
-                <Info size={18} />
-                <h4 className="font-bold text-[10px] uppercase tracking-widest">Importante</h4>
-             </div>
-             <p className="text-[11px] text-slate-500 leading-relaxed italic">
-                A inclusão de novos feriados impactará imediatamente a geração de cronogramas, ignorando estas datas durante o cálculo.
-             </p>
+          <div className="card p-5">
+            <div className="flex items-center gap-2 text-muted mb-2"><Info size={16} /><h4 className="font-medium text-sm text-ink">Importante</h4></div>
+            <p className="text-xs text-muted leading-relaxed">
+              Feriados e recessos são ignorados automaticamente na geração de cronogramas, conforme a política escolhida.
+            </p>
           </div>
         </div>
 
-        {/* Listagem principal */}
         <div className="lg:col-span-2">
           {activeTab === 'holidays' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {holidays.length === 0 ? (
-                <div className="col-span-full text-center py-20 text-slate-600 font-bold italic">Nenhum feriado na base de dados.</div>
+                <div className="col-span-full card border-dashed p-12 text-center text-muted text-sm">Nenhum feriado cadastrado.</div>
               ) : (
-                holidays.sort((a,b) => a.date.localeCompare(b.date)).map(h => (
-                  <div key={h.id} className="glass p-5 rounded-3xl border border-slate-800 flex items-center justify-between group hover:border-blue-500/30 transition-all backdrop-blur-3xl">
-                    <div className="flex items-center gap-5">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-all">
-                        <span className="text-[8px] font-black uppercase opacity-60 leading-none mb-1">
-                            {formatDateInfo(h.date).month}
-                        </span>
-                        <span className="text-xl font-black leading-none">{formatDateInfo(h.date).day}</span>
+                [...holidays].sort((a, b) => a.date.localeCompare(b.date)).map((h) => (
+                  <div key={h.id} className="card p-4 flex items-center justify-between group hover:border-accent/40 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-surface-2 border border-line flex flex-col items-center justify-center text-accent">
+                        <span className="text-[9px] uppercase opacity-70 leading-none">{formatDateInfo(h.date).month}</span>
+                        <span className="text-lg font-semibold leading-none mt-0.5">{formatDateInfo(h.date).day}</span>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-extrabold text-white uppercase text-xs tracking-tighter truncate">{h.description}</h4>
-                        <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[9px] text-slate-500 font-black uppercase tracking-widest px-2 py-0.5 bg-slate-900 rounded-md border border-slate-800">{h.type}</span>
-                            <span className="text-[10px] text-slate-600 font-medium">2026</span>
-                        </div>
+                      <div className="min-w-0">
+                        <h4 className="font-medium text-ink truncate">{h.description}</h4>
+                        <span className="text-xs text-muted capitalize">{h.type} · {h.date.split('-')[0]}</span>
                       </div>
                     </div>
-                    <button 
-                        onClick={() => deleteHoliday(h.id)}
-                        className="p-3 text-slate-700 hover:text-red-500 hover:bg-red-500/10 rounded-2xl transition-all opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 size={18} />
+                    <button onClick={() => deleteHoliday(h.id)} className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
+                      <Trash2 size={16} />
                     </button>
                   </div>
                 ))
               )}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {recesses.length === 0 ? (
-                <div className="text-center py-20 text-slate-600 font-bold italic">Nenhum recesso cadastrado.</div>
+                <div className="card border-dashed p-12 text-center text-muted text-sm">Nenhum recesso cadastrado.</div>
               ) : (
-                recesses.map(r => (
-                  <div key={r.id} className="glass p-6 rounded-3xl border border-slate-800 flex items-center justify-between group bg-gradient-to-r from-purple-500/5 to-transparent hover:border-purple-500/30 transition-all">
-                    <div className="flex items-center gap-6">
-                      <div className="w-14 h-14 rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-400 border border-purple-500/20">
-                        <Calendar size={28} />
-                      </div>
+                recesses.map((r) => (
+                  <div key={r.id} className="card p-5 flex items-center justify-between group hover:border-accent/40 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-accent/10 flex items-center justify-center text-accent"><CalendarRange size={24} /></div>
                       <div>
-                        <h4 className="font-black text-white text-base uppercase tracking-tight mb-1">{r.description}</h4>
-                        <div className="flex items-center gap-3">
-                            <span className="text-xs text-slate-400 font-bold">
-                                {formatDateInfo(r.start_date).full} até {formatDateInfo(r.end_date).full}
-                            </span>
-                            <div className="w-1 h-1 rounded-full bg-slate-700"></div>
-                            <span className="text-[10px] text-purple-400 font-black uppercase">Férias Acadêmicas</span>
-                        </div>
+                        <h4 className="font-medium text-ink">{r.description}</h4>
+                        <span className="text-sm text-muted">{formatDateInfo(r.start_date).full} até {formatDateInfo(r.end_date).full}</span>
                       </div>
                     </div>
-                    <button 
-                        onClick={() => deleteRecess(r.id)}
-                        className="p-4 text-slate-700 hover:text-red-500 hover:bg-red-500/10 rounded-2xl transition-all opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 size={20} />
+                    <button onClick={() => deleteRecess(r.id)} className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
+                      <Trash2 size={18} />
                     </button>
                   </div>
                 ))
@@ -476,17 +325,17 @@ const HolidayRecessList = () => {
   );
 };
 
-const FormGroup = ({ label, children }: any) => (
-    <div className="space-y-2">
-      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">{label}</label>
-      {children}
-    </div>
+const FormGroup = ({ label, children }: { label: string; children: ReactNode }) => (
+  <div className="space-y-1.5">
+    <label className="text-xs font-medium text-muted">{label}</label>
+    {children}
+  </div>
 );
 
 const ImportStat = ({ label, value }: { label: string; value: number }) => (
-  <div className="rounded-xl bg-slate-950/50 border border-slate-800 px-2 py-2">
-    <div className="text-sm font-black text-white">{value}</div>
-    <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{label}</div>
+  <div className="rounded-lg bg-surface-2 border border-line px-2 py-2">
+    <div className="text-sm font-semibold text-ink">{value}</div>
+    <div className="text-[10px] text-muted uppercase tracking-wide">{label}</div>
   </div>
 );
 
