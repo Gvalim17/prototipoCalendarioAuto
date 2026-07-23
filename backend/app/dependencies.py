@@ -29,6 +29,7 @@ def get_current_user(
     session.last_seen_at = now
     db.commit()
     request.state.user_id = session.user_id
+    request.state.session = session
     return session.user
 
 
@@ -70,6 +71,11 @@ def get_course_or_404(db: Session, course_id: int) -> Course:
     if not course:
         raise HTTPException(status_code=404, detail="Curso não encontrado")
     return course
+
+
+def ensure_owner_or_admin(owner_id: int | None, user: User) -> None:
+    if owner_id is not None and owner_id != user.id and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Este cronograma pertence a outro professor.")
 
 
 def get_module_or_404(db: Session, module_id: int) -> Module:

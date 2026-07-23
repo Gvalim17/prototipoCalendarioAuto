@@ -7,9 +7,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..dependencies import get_current_user, require_admin_action, validate_schedule_references
+from ..dependencies import ensure_owner_or_admin, get_current_user, require_admin_action, validate_schedule_references
 from ..logging_config import get_logger
-from ..models.base import Course, Discipline, Module, ScheduleConfig, ScheduledClass, User
+from ..models.base import Course, Discipline, Module, ScheduleConfig, ScheduledClass, ScheduledClassStatus, User
 from ..schemas.base_schemas import (
     CalendarEventRead,
     FullScheduleCreate,
@@ -19,7 +19,11 @@ from ..schemas.base_schemas import (
     ResolvedScheduleResponse,
     ScheduleConfigBase,
     ScheduleConfigRead,
+    ScheduleConflictCheckRequest,
+    ScheduleConflictCheckResponse,
+    ScheduleConflictItem,
     ScheduledClassRead,
+    ScheduledClassUpdate,
     ScheduleResponse,
     StatsRead,
 )
@@ -95,6 +99,10 @@ def _config_to_read(db_config: ScheduleConfig) -> dict:
         "course_name": db_config.course.name,
         "module_name": db_config.module.name,
         "discipline_name": db_config.discipline.name,
+        "institution": db_config.course.institution,
+        "academic_level": db_config.course.academic_level,
+        "owner_id": db_config.owner_id,
+        "owner_name": db_config.owner.name if db_config.owner else None,
     }
 
 
@@ -153,6 +161,58 @@ def resolve_schedule_conflicts(request: ResolveConflictsRequest, db: Session = D
         raise HTTPException(status_code=500, detail=str(e))
 
 
+NEAR_CONFLICT_MINUTES = 30
+
+
+def _to_minutes(t) -> int:
+    return t.hour * 60 + t.minute
+
+
+@router.post("/schedules/check-conflicts", response_model=ScheduleConflictCheckResponse)
+def check_schedule_conflicts(
+    request: ScheduleConflictCheckRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Avisa (sem bloquear) quando o professor já tem outra aula no mesmo dia
+    que se sobrepõe (`overlaps`) ou fica a menos de 30 min (`near`) do horário
+    informado. A decisão de salvar mesmo assim é do professor, no frontend."""
+    if not request.dates or not request.start_time or not request.end_time:
+        return ScheduleConflictCheckResponse(overlaps=[], near=[])
+
+    query = (
+        db.query(ScheduledClass, ScheduleConfig, Course, Discipline)
+        .join(ScheduleConfig, ScheduledClass.config_id == ScheduleConfig.id)
+        .join(Course, ScheduleConfig.course_id == Course.id)
+        .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .filter(ScheduleConfig.owner_id == user.id)
+        .filter(ScheduledClass.date.in_(request.dates))
+        .filter(ScheduledClass.status == ScheduledClassStatus.SCHEDULED)
+    )
+    if request.exclude_config_id is not None:
+        query = query.filter(ScheduleConfig.id != request.exclude_config_id)
+
+    new_start, new_end = _to_minutes(request.start_time), _to_minutes(request.end_time)
+    overlaps: list[ScheduleConflictItem] = []
+    near: list[ScheduleConflictItem] = []
+    for sc, cfg, course, discipline in query.all():
+        if not cfg.start_time or not cfg.end_time:
+            continue
+        other_start, other_end = _to_minutes(cfg.start_time), _to_minutes(cfg.end_time)
+        item = ScheduleConflictItem(
+            date=sc.date, course_name=course.name, discipline_name=discipline.name,
+            start_time=cfg.start_time, end_time=cfg.end_time,
+        )
+        if other_start < new_end and new_start < other_end:
+            overlaps.append(item)
+        else:
+            gap = min(abs(other_start - new_end), abs(new_start - other_end))
+            if gap < NEAR_CONFLICT_MINUTES:
+                near.append(item)
+
+    return ScheduleConflictCheckResponse(overlaps=overlaps, near=near)
+
+
 @router.post("/schedules/", response_model=FullScheduleRead)
 def save_schedule(
     schedule_data: FullScheduleCreate,
@@ -194,15 +254,16 @@ def save_schedule(
 
 
 @router.get("/schedules/configs/", response_model=List[ScheduleConfigRead])
-def list_schedule_configs(db: Session = Depends(get_db)):
-    configs = (
+def list_schedule_configs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = (
         db.query(ScheduleConfig)
         .join(Course, ScheduleConfig.course_id == Course.id)
         .join(Module, ScheduleConfig.module_id == Module.id)
         .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
-        .order_by(ScheduleConfig.start_date.desc())
-        .all()
     )
+    if user.role != "admin":
+        query = query.filter(ScheduleConfig.owner_id == user.id)
+    configs = query.order_by(ScheduleConfig.start_date.desc()).all()
     return [_config_to_read(c) for c in configs]
 
 
@@ -221,24 +282,65 @@ def delete_all_schedules(db: Session = Depends(get_db)):
 
 
 @router.get("/schedules/{config_id}", response_model=ScheduleConfigRead)
-def get_schedule_config(config_id: int, db: Session = Depends(get_db)):
+def get_schedule_config(config_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db_config = db.query(ScheduleConfig).filter(ScheduleConfig.id == config_id).first()
     if not db_config:
         raise HTTPException(status_code=404, detail="Cronograma não encontrado")
+    ensure_owner_or_admin(db_config.owner_id, user)
     return _config_to_read(db_config)
 
 
 @router.get("/schedules/{config_id}/classes", response_model=List[ScheduledClassRead])
-def list_schedule_classes(config_id: int, db: Session = Depends(get_db)):
+def list_schedule_classes(config_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db_config = db.query(ScheduleConfig).filter(ScheduleConfig.id == config_id).first()
     if not db_config:
         raise HTTPException(status_code=404, detail="Cronograma não encontrado")
+    ensure_owner_or_admin(db_config.owner_id, user)
     return (
         db.query(ScheduledClass)
         .filter(ScheduledClass.config_id == config_id)
         .order_by(ScheduledClass.order)
         .all()
     )
+
+
+@router.patch("/schedules/{config_id}/classes/{class_id}", response_model=ScheduledClassRead)
+def update_scheduled_class_date(
+    config_id: int,
+    class_id: int,
+    payload: ScheduledClassUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Edição pontual: muda a data de UMA aula já gerada ou a cancela, sem
+    mexer nas demais aulas do cronograma nem regenerar nada. O motivo é
+    obrigatório (payload.reason) e a ação nunca é bloqueada por feriado ou
+    recesso — essa validação só se aplica à geração automática do
+    cronograma; a alteração manual pontual é sempre uma decisão do professor."""
+    db_config = db.query(ScheduleConfig).filter(ScheduleConfig.id == config_id).first()
+    if not db_config:
+        raise HTTPException(status_code=404, detail="Cronograma não encontrado")
+    ensure_owner_or_admin(db_config.owner_id, user)
+
+    scheduled_class = (
+        db.query(ScheduledClass)
+        .filter(ScheduledClass.id == class_id, ScheduledClass.config_id == config_id)
+        .first()
+    )
+    if not scheduled_class:
+        raise HTTPException(status_code=404, detail="Aula não encontrada")
+
+    scheduled_class.date = payload.date
+    scheduled_class.status = ScheduledClassStatus.CANCELLED if payload.cancelled else ScheduledClassStatus.SCHEDULED
+    scheduled_class.change_reason = payload.reason
+    db.commit()
+    db.refresh(scheduled_class)
+    logger.info(
+        f"Aula alterada: config_id={config_id} class_id={class_id} nova_data={payload.date} "
+        f"cancelada={payload.cancelled} motivo={payload.reason!r}",
+        extra={"event": "scheduled_class_date_updated"},
+    )
+    return scheduled_class
 
 
 @router.put("/schedules/{config_id}", response_model=FullScheduleRead)
@@ -253,8 +355,7 @@ def update_schedule(
     db_config = db.query(ScheduleConfig).filter(ScheduleConfig.id == config_id).first()
     if not db_config:
         raise HTTPException(status_code=404, detail="Cronograma não encontrado")
-    if db_config.owner_id is not None and db_config.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Este cronograma pertence a outro professor.")
+    ensure_owner_or_admin(db_config.owner_id, user)
     if db_config.owner_id is None:
         db_config.owner_id = user.id
 
@@ -292,10 +393,11 @@ def update_schedule(
 
 
 @router.delete("/schedules/{config_id}")
-def delete_specific_schedule(config_id: int, db: Session = Depends(get_db)):
+def delete_specific_schedule(config_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db_config = db.query(ScheduleConfig).filter(ScheduleConfig.id == config_id).first()
     if not db_config:
         raise HTTPException(status_code=404, detail="Cronograma não encontrado")
+    ensure_owner_or_admin(db_config.owner_id, user)
 
     db.query(ScheduledClass).filter(ScheduledClass.config_id == config_id).delete()
     db.delete(db_config)
@@ -305,16 +407,17 @@ def delete_specific_schedule(config_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/schedules/export/xlsx")
-def export_schedules_xlsx(db: Session = Depends(get_db)):
-    results = (
+def export_schedules_xlsx(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = (
         db.query(ScheduledClass)
         .join(ScheduleConfig)
         .join(Course, ScheduleConfig.course_id == Course.id)
         .join(Module, ScheduleConfig.module_id == Module.id)
         .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
-        .order_by(ScheduledClass.date)
-        .all()
     )
+    if user.role != "admin":
+        query = query.filter(ScheduleConfig.owner_id == user.id)
+    results = query.order_by(ScheduledClass.date).all()
     rows = [
         {
             "Instituição": sc.config.course.institution or "",
@@ -388,14 +491,16 @@ def export_preview_xlsx(data: PreviewExportRequest):
 
 
 @router.get("/schedules/", response_model=List[CalendarEventRead])
-def list_all_scheduled_classes(db: Session = Depends(get_db)):
-    results = (
+def list_all_scheduled_classes(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = (
         db.query(ScheduledClass)
         .join(ScheduleConfig)
         .join(Course, ScheduleConfig.course_id == Course.id)
         .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
-        .all()
     )
+    if user.role != "admin":
+        query = query.filter(ScheduleConfig.owner_id == user.id)
+    results = query.all()
 
     return [
         {

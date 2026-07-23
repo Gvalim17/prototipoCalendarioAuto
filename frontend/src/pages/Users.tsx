@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Mail, Shield, Trash2, UserPlus, UserRound } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useConfirm } from '../contexts/ConfirmContext';
 
 interface ManagedUser {
   id: number;
@@ -30,6 +31,7 @@ const Users = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const confirm = useConfirm();
 
   const fetchUsers = async () => {
     try {
@@ -77,7 +79,11 @@ const Users = () => {
   };
 
   const removeUser = async (target: ManagedUser) => {
-    if (!window.confirm(`Remover o acesso de ${target.name}? Esta ação não pode ser desfeita.`)) return;
+    const ok = await confirm({
+      message: `Remover o acesso de ${target.name}? Esta ação não pode ser desfeita.`,
+      confirmLabel: 'Remover', danger: true,
+    });
+    if (!ok) return;
     setError('');
     try {
       await api.delete(`/users/${target.id}`);

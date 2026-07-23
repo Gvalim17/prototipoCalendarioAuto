@@ -19,8 +19,8 @@ from ..dependencies import get_current_user, require_csrf
 from ..logging_config import get_logger
 from ..models.base import AuthThrottleEvent, PasswordResetToken, User, UserSession
 from ..schemas.auth_schemas import (
-    CurrentUserRead, LoginRequest, PasswordResetConfirm, PasswordResetRequest,
-    PrivacyExportRead, RegisterRequest,
+    AuthSessionRead, CsrfTokenRead, CurrentUserRead, LoginRequest, PasswordResetConfirm,
+    PasswordResetRequest, PrivacyExportRead, RegisterRequest,
 )
 from ..security import fingerprint, hash_password, hash_token, new_token, verify_password
 from ..services.email_service import EmailDeliveryError, send_password_reset_email
@@ -98,7 +98,7 @@ def _set_session_cookies(response: Response, session_token: str, csrf_token: str
     response.set_cookie(CSRF_COOKIE, csrf_token, httponly=False, **cookie_options)
 
 
-def _create_session(db: Session, user: User, response: Response) -> None:
+def _create_session(db: Session, user: User, response: Response) -> str:
     now = _now()
     session_token = new_token()
     csrf_token = new_token()
@@ -113,6 +113,11 @@ def _create_session(db: Session, user: User, response: Response) -> None:
     user.last_login_at = now
     db.commit()
     _set_session_cookies(response, session_token, csrf_token)
+    return csrf_token
+
+
+def _auth_session_response(user: User, csrf_token: str) -> AuthSessionRead:
+    return AuthSessionRead(**CurrentUserRead.model_validate(user).model_dump(), csrf_token=csrf_token)
 
 
 def _require_privacy_consent(consent: bool) -> None:
@@ -209,7 +214,7 @@ def _verify_bootstrap_token(provided: str | None) -> bool:
     return bool(expected) and bool(provided) and hmac.compare_digest(provided, expected)
 
 
-@router.post("/register", response_model=CurrentUserRead, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=AuthSessionRead, status_code=status.HTTP_201_CREATED)
 def register(
     payload: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db),
     x_bootstrap_admin_token: str | None = Header(default=None, alias="X-Bootstrap-Admin-Token"),
@@ -252,15 +257,15 @@ def register(
     _record_consent(user)
     db.add(user)
     db.flush()
-    _create_session(db, user, response)
+    csrf_token = _create_session(db, user, response)
     db.refresh(user)
     if role == "admin":
         _log_auth(request, "Conta de administrador criada via bootstrap.", event="auth_bootstrap_admin_created", outcome="success", user=user)
     _log_auth(request, "Conta criada e sessão iniciada.", event="auth_register_success", outcome="success", user=user)
-    return user
+    return _auth_session_response(user, csrf_token)
 
 
-@router.post("/login", response_model=CurrentUserRead)
+@router.post("/login", response_model=AuthSessionRead)
 def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     key = _throttle_key(request, payload.email)
     try:
@@ -274,10 +279,10 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         _log_auth(request, "Login recusado: credenciais inválidas.", event="auth_login_denied", outcome="denied")
         raise HTTPException(status_code=401, detail="E-mail ou senha incorretos.")
     _clear_throttle(db, key, "login")
-    _create_session(db, user, response)
+    csrf_token = _create_session(db, user, response)
     db.refresh(user)
     _log_auth(request, "Login por senha concluído.", event="auth_password_login_success", outcome="success", user=user)
-    return user
+    return _auth_session_response(user, csrf_token)
 
 
 @router.get("/google/available")
@@ -324,7 +329,7 @@ def request_password_reset(payload: PasswordResetRequest, request: Request, db: 
     return {"message": "Se existir uma conta para este e-mail, enviaremos as instruções de recuperação."}
 
 
-@router.post("/password-reset/confirm", response_model=CurrentUserRead)
+@router.post("/password-reset/confirm", response_model=AuthSessionRead)
 def confirm_password_reset(payload: PasswordResetConfirm, request: Request, response: Response, db: Session = Depends(get_db)):
     now = _now()
     reset = db.query(PasswordResetToken).filter(
@@ -340,10 +345,10 @@ def confirm_password_reset(payload: PasswordResetConfirm, request: Request, resp
     reset.used_at = now
     db.query(UserSession).filter(UserSession.user_id == user.id).delete()
     db.commit()
-    _create_session(db, user, response)
+    csrf_token = _create_session(db, user, response)
     db.refresh(user)
     _log_auth(request, "Senha redefinida; sessões anteriores foram revogadas.", event="auth_reset_success", outcome="success", user=user)
-    return user
+    return _auth_session_response(user, csrf_token)
 
 
 @router.get("/google/start")
@@ -442,6 +447,27 @@ def google_callback(
 @router.get("/me", response_model=CurrentUserRead)
 def me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.post("/csrf", response_model=CsrfTokenRead)
+def issue_csrf_token(request: Request, response: Response, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Reemite o CSRF token da sessão atual em texto plano no corpo da resposta.
+
+    Necessário porque o front (Vercel) não consegue ler o cookie calendario_csrf
+    setado pelo backend (Render) em domínio diferente — ver AuthSessionRead.
+    Chamado pelo front ao carregar a página quando ainda não tem o token em memória
+    (nova aba, recarregamento, ou retorno do fluxo OAuth do Google).
+    """
+    session: UserSession = request.state.session
+    csrf_token = new_token()
+    session.csrf_token_hash = hash_token(csrf_token)
+    db.commit()
+    response.set_cookie(
+        CSRF_COOKIE, csrf_token, httponly=False,
+        max_age=SESSION_DAYS * 24 * 60 * 60, secure=_cookie_secure(),
+        samesite=_cookie_samesite(), path="/",
+    )
+    return {"csrf_token": csrf_token}
 
 
 @router.get("/me/export", response_model=PrivacyExportRead)

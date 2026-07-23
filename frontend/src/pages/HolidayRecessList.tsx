@@ -2,6 +2,8 @@ import { ReactNode, useEffect, useRef, useState } from 'react';
 import api from '../api/client';
 import { AlertCircle, CalendarRange, CheckCircle2, FileText, Plus, Trash2, Info, Upload as UploadIcon, X } from 'lucide-react';
 import type { Holiday, Recess } from '../types/domain';
+import { useToast } from '../contexts/ToastContext';
+import { useConfirm } from '../contexts/ConfirmContext';
 
 interface HolidayImportResult {
   message: string;
@@ -26,6 +28,8 @@ const HolidayRecessList = () => {
 
   const [holidayForm, setHolidayForm] = useState({ date: '', description: '', type: 'nacional' });
   const [recessForm, setRecessForm] = useState({ start_date: '', end_date: '', description: '' });
+  const toast = useToast();
+  const confirm = useConfirm();
 
   useEffect(() => {
     fetchData();
@@ -48,8 +52,9 @@ const HolidayRecessList = () => {
       await api.post(`/holidays/`, { ...holidayForm, source: 'Institucional' });
       setHolidayForm({ date: '', description: '', type: 'nacional' });
       fetchData();
-    } catch {
-      alert('Erro ao cadastrar feriado.');
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      toast.error(detail || 'Erro ao cadastrar feriado.');
     }
   };
 
@@ -61,7 +66,7 @@ const HolidayRecessList = () => {
       fetchData();
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
-      alert(detail || 'Erro ao cadastrar recesso.');
+      toast.error(detail || 'Erro ao cadastrar recesso.');
     }
   };
 
@@ -100,15 +105,13 @@ const HolidayRecessList = () => {
   };
 
   const deleteHoliday = async (id: number) => {
-    if (window.confirm('Remover este feriado?')) {
-      try { await api.delete(`/holidays/${id}`); fetchData(); } catch { alert('Erro ao excluir feriado.'); }
-    }
+    if (!(await confirm({ message: 'Remover este feriado?', confirmLabel: 'Remover', danger: true }))) return;
+    try { await api.delete(`/holidays/${id}`); fetchData(); } catch { toast.error('Erro ao excluir feriado.'); }
   };
 
   const deleteRecess = async (id: number) => {
-    if (window.confirm('Remover este recesso?')) {
-      try { await api.delete(`/recesses/${id}`); fetchData(); } catch { alert('Erro ao excluir recesso.'); }
-    }
+    if (!(await confirm({ message: 'Remover este recesso?', confirmLabel: 'Remover', danger: true }))) return;
+    try { await api.delete(`/recesses/${id}`); fetchData(); } catch { toast.error('Erro ao excluir recesso.'); }
   };
 
   const formatDateInfo = (dateStr: string) => {
@@ -119,9 +122,12 @@ const HolidayRecessList = () => {
 
   const deleteAll = async () => {
     const type = activeTab === 'holidays' ? 'feriados' : 'recessos';
-    if (window.confirm(`Apagar TODOS os ${type}? Esta ação não pode ser desfeita.`)) {
-      try { await api.delete(`/${activeTab}/all`); fetchData(); } catch { alert(`Erro ao limpar ${type}.`); }
-    }
+    const ok = await confirm({
+      message: `Apagar TODOS os ${type}? Esta ação não pode ser desfeita.`,
+      confirmLabel: 'Apagar tudo', danger: true,
+    });
+    if (!ok) return;
+    try { await api.delete(`/${activeTab}/all`); fetchData(); } catch { toast.error(`Erro ao limpar ${type}.`); }
   };
 
   return (

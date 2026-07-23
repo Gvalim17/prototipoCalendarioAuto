@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronUp, Download, FileText, Paperclip, Save, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Download, FileText, Paperclip, Pencil, Save, Trash2, Upload } from 'lucide-react';
 import api from '../api/client';
-import type { LessonScript, ScheduleConfigRead, ScheduledClassSummary } from '../types/domain';
+import type { LessonScript, ScheduleConflictCheckResponse, ScheduleConfigRead, ScheduledClassSummary } from '../types/domain';
 import LessonPlanModal from '../components/LessonPlanModal';
+import { useToast } from '../contexts/ToastContext';
+import { useConfirm } from '../contexts/ConfirmContext';
 
 const getErrorMessage = (error: unknown) => {
   const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
@@ -21,6 +23,7 @@ const LessonPlanner = () => {
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [showPtd, setShowPtd] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     if (!configId) return;
@@ -29,8 +32,9 @@ const LessonPlanner = () => {
       api.get<ScheduledClassSummary[]>(`/schedules/${configId}/classes`),
     ])
       .then(([cfgRes, classesRes]) => { setConfig(cfgRes.data); setClasses(classesRes.data); })
-      .catch((err) => alert(getErrorMessage(err)))
+      .catch((err) => toast.error(getErrorMessage(err)))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configId]);
 
   if (loading) return <div className="py-20 text-center text-muted text-sm">Carregando planejamento...</div>;
@@ -62,8 +66,12 @@ const LessonPlanner = () => {
             <LessonRow
               key={lesson.id}
               lesson={lesson}
+              configId={configId!}
+              startTime={config.start_time}
+              endTime={config.end_time}
               expanded={expandedId === lesson.id}
               onToggle={() => setExpandedId(expandedId === lesson.id ? null : lesson.id)}
+              onDateChanged={(classId, newDate, status, reason) => setClasses((prev) => prev.map((c) => c.id === classId ? { ...c, date: newDate, status, change_reason: reason } : c))}
             />
           ))}
         </div>
@@ -76,18 +84,35 @@ const LessonPlanner = () => {
   );
 };
 
-const LessonRow = ({ lesson, expanded, onToggle }: { lesson: ScheduledClassSummary; expanded: boolean; onToggle: () => void }) => {
+interface LessonRowProps {
+  lesson: ScheduledClassSummary;
+  configId: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  expanded: boolean;
+  onToggle: () => void;
+  onDateChanged: (classId: number, newDate: string, status: 'scheduled' | 'cancelled', reason: string) => void;
+}
+
+const LessonRow = ({ lesson, configId, startTime, endTime, expanded, onToggle, onDateChanged }: LessonRowProps) => {
   const [script, setScript] = useState<LessonScript | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [editingDate, setEditingDate] = useState(false);
+  const [newDate, setNewDate] = useState(lesson.date);
+  const [cancelClass, setCancelClass] = useState(false);
+  const [reason, setReason] = useState('');
+  const [savingDate, setSavingDate] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const toast = useToast();
+  const confirm = useConfirm();
 
   useEffect(() => {
     if (!expanded || loaded) return;
     api.get<LessonScript>(`/lessons/${lesson.id}/script`)
       .then((res) => setScript(res.data))
-      .catch((err) => alert(getErrorMessage(err)))
+      .catch((err) => toast.error(getErrorMessage(err)))
       .finally(() => setLoaded(true));
   }, [expanded, loaded, lesson.id]);
 
@@ -98,7 +123,7 @@ const LessonRow = ({ lesson, expanded, onToggle }: { lesson: ScheduledClassSumma
       const res = await api.put<LessonScript>(`/lessons/${lesson.id}/script`, { topic: script.topic, content: script.content });
       setScript(res.data);
     } catch (err) {
-      alert(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -114,7 +139,7 @@ const LessonRow = ({ lesson, expanded, onToggle }: { lesson: ScheduledClassSumma
       });
       setScript(res.data);
     } catch (err) {
-      alert(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -122,12 +147,52 @@ const LessonRow = ({ lesson, expanded, onToggle }: { lesson: ScheduledClassSumma
   };
 
   const deleteAttachment = async (attachmentId: number) => {
-    if (!window.confirm('Remover este anexo?')) return;
+    const ok = await confirm({ message: 'Remover este anexo?', confirmLabel: 'Remover', danger: true });
+    if (!ok) return;
     try {
       await api.delete(`/lesson-attachments/${attachmentId}`);
       setScript((prev) => prev ? { ...prev, attachments: prev.attachments.filter((a) => a.id !== attachmentId) } : prev);
     } catch (err) {
-      alert(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const confirmDateChange = async () => {
+    if (newDate === lesson.date && !cancelClass && lesson.status !== 'cancelled') { setEditingDate(false); return; }
+    if (reason.trim().length < 3) {
+      toast.error('Informe o motivo da alteração (mínimo 3 caracteres).');
+      return;
+    }
+    setSavingDate(true);
+    try {
+      if (!cancelClass && startTime && endTime) {
+        const conflictRes = await api.post<ScheduleConflictCheckResponse>('/schedules/check-conflicts', {
+          dates: [newDate], start_time: startTime, end_time: endTime, exclude_config_id: Number(configId),
+        });
+        const { overlaps, near } = conflictRes.data;
+        if (overlaps.length > 0 || near.length > 0) {
+          const summary = [...overlaps, ...near]
+            .map((c) => `${c.discipline_name} (${c.course_name}) às ${c.start_time?.slice(0, 5)}–${c.end_time?.slice(0, 5)}`)
+            .join('\n');
+          const proceed = await confirm({
+            title: 'Conflito de horário',
+            message: `Você já tem outra aula nesse dia:\n${summary}\n\nDeseja mudar a data mesmo assim?`,
+            confirmLabel: 'Mudar mesmo assim',
+          });
+          if (!proceed) { setSavingDate(false); return; }
+        }
+      }
+      await api.patch(`/schedules/${configId}/classes/${lesson.id}`, {
+        date: newDate, reason: reason.trim(), cancelled: cancelClass,
+      });
+      onDateChanged(lesson.id, newDate, cancelClass ? 'cancelled' : 'scheduled', reason.trim());
+      setEditingDate(false);
+      setReason('');
+      setCancelClass(false);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setSavingDate(false);
     }
   };
 
@@ -138,16 +203,67 @@ const LessonRow = ({ lesson, expanded, onToggle }: { lesson: ScheduledClassSumma
 
   return (
     <div className="card overflow-hidden">
-      <button onClick={onToggle} className="w-full flex items-center justify-between p-4 text-left hover:bg-surface-2/60 transition-colors">
-        <div className="flex items-center gap-3">
+      <div className="w-full flex items-center justify-between p-4 hover:bg-surface-2/60 transition-colors">
+        <button onClick={onToggle} className="flex items-center gap-3 text-left flex-1 min-w-0">
           <div className="w-9 h-9 rounded-lg bg-accent/10 text-accent flex items-center justify-center text-xs font-semibold shrink-0">{lesson.order}</div>
-          <div>
-            <p className="text-sm font-medium text-ink capitalize">{formatDate(lesson.date)}</p>
+          <div className="min-w-0">
+            {editingDate ? (
+              <div className="flex flex-col gap-2 py-1" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input
+                    type="date" value={newDate} disabled={cancelClass}
+                    onChange={(e) => setNewDate(e.target.value)}
+                    className="input-custom h-8 py-0 text-sm w-auto disabled:opacity-50"
+                  />
+                  <label className="flex items-center gap-1.5 text-xs text-muted">
+                    <input type="checkbox" checked={cancelClass} onChange={(e) => setCancelClass(e.target.checked)} />
+                    Cancelar esta aula (sem reposição)
+                  </label>
+                </div>
+                <input
+                  type="text" value={reason} onChange={(e) => setReason(e.target.value)}
+                  placeholder="Motivo da alteração (obrigatório)"
+                  className="input-custom h-8 py-0 text-sm"
+                />
+                <span className="flex items-center gap-3">
+                  <button onClick={() => void confirmDateChange()} disabled={savingDate} className="text-xs text-accent font-medium hover:underline">
+                    {savingDate ? 'Salvando...' : 'Confirmar'}
+                  </button>
+                  <button
+                    onClick={() => { setEditingDate(false); setNewDate(lesson.date); setCancelClass(false); setReason(''); }}
+                    disabled={savingDate} className="text-xs text-muted hover:underline"
+                  >
+                    Descartar
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <>
+                <p className={`text-sm font-medium capitalize ${lesson.status === 'cancelled' ? 'text-muted line-through' : 'text-ink'}`}>
+                  {formatDate(lesson.date)}
+                  {lesson.status === 'cancelled' && <span className="ml-2 text-xs font-normal no-underline text-danger">Cancelada</span>}
+                </p>
+                {lesson.change_reason && <p className="text-xs text-muted mt-0.5">Motivo: {lesson.change_reason}</p>}
+              </>
+            )}
             {script?.topic && <p className="text-xs text-muted mt-0.5">{script.topic}</p>}
           </div>
+        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {!editingDate && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setEditingDate(true); setNewDate(lesson.date); }}
+              title="Editar ou cancelar esta aula"
+              className="p-2 text-muted hover:text-accent hover:bg-accent/10 rounded-lg transition-colors"
+            >
+              <Pencil size={15} />
+            </button>
+          )}
+          <button onClick={onToggle} className="p-2 text-muted">
+            {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          </button>
         </div>
-        {expanded ? <ChevronUp size={18} className="text-muted" /> : <ChevronDown size={18} className="text-muted" />}
-      </button>
+      </div>
 
       {expanded && (
         <div className="p-4 border-t border-line space-y-4">

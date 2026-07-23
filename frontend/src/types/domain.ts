@@ -109,6 +109,23 @@ export interface ScheduleConfigRead {
   course_name: string;
   module_name: string;
   discipline_name: string;
+  institution?: string | null;
+  academic_level?: AcademicLevel | null;
+  owner_id?: number | null;
+  owner_name?: string | null;
+}
+
+export interface ScheduleConflictItem {
+  date: string;
+  course_name: string;
+  discipline_name: string;
+  start_time?: string | null;
+  end_time?: string | null;
+}
+
+export interface ScheduleConflictCheckResponse {
+  overlaps: ScheduleConflictItem[];
+  near: ScheduleConflictItem[];
 }
 
 export interface LogEntry {
@@ -193,4 +210,6 @@ export interface ScheduledClassSummary {
   id: number;
   date: string;
   order: number;
+  status: 'scheduled' | 'cancelled';
+  change_reason?: string | null;
 }

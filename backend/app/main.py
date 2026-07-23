@@ -1,7 +1,9 @@
 import os
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 from .database import init_db
 from .logging_config import get_logger, setup_logging
@@ -38,6 +40,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    request_id = getattr(request.state, "request_id", None)
+    logger.error(
+        "Violação de integridade no banco de dados",
+        extra={"event": "integrity_error", "path": request.url.path, "method": request.method, "request_id": request_id},
+        exc_info=exc,
+    )
+    pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+    if pgcode == "23503":  # foreign_key_violation
+        detail = "Não é possível concluir esta ação porque existem outros registros vinculados a este item. Remova-os primeiro."
+    elif pgcode == "23505":  # unique_violation
+        detail = "Já existe um registro com esses dados."
+    elif pgcode == "23502":  # not_null_violation
+        detail = "Campo obrigatório ausente para concluir esta operação."
+    else:
+        detail = "Não foi possível concluir a operação devido a uma restrição do banco de dados."
+    return JSONResponse(status_code=409, content={"detail": detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", None)
+    logger.error(
+        "Erro não tratado",
+        extra={"event": "unhandled_exception", "path": request.url.path, "method": request.method, "request_id": request_id},
+        exc_info=exc,
+    )
+    return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor. Tente novamente em instantes."})
 
 
 @app.get("/")

@@ -7,17 +7,25 @@ import CourseList from './pages/CourseList';
 import HolidayRecessList from './pages/HolidayRecessList';
 import Logs from './pages/Logs';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { ToastProvider } from './contexts/ToastContext';
+import { ConfirmProvider } from './contexts/ConfirmContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './pages/Login';
 import Alerts from './pages/Alerts';
 import Users from './pages/Users';
 import LessonPlanner from './pages/LessonPlanner';
+import Terms from './pages/Terms';
+import Privacy from './pages/Privacy';
 
 function AuthenticatedApp() {
   const { user, loading } = useAuth();
   // Um link de redefinição de senha deve sempre abrir a tela cheia de login,
   // mesmo que a aba já tenha uma sessão ativa de outra conta.
   const isResetPasswordLink = window.location.pathname === '/reset-password';
+  // Termos de Uso e Política de Privacidade precisam ser acessíveis mesmo sem
+  // conta (ex.: link compartilhado, consulta antes do cadastro).
+  const isTermsLink = window.location.pathname === '/termos';
+  if (isTermsLink) return <Terms />;
 
   if (loading) {
     return <main className="min-h-screen bg-bg text-muted grid place-items-center text-sm">Carregando...</main>;
@@ -38,6 +46,7 @@ function AuthenticatedApp() {
           <Route path="/generate/:configId" element={<ScheduleForm />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/alerts" element={<Alerts />} />
+          <Route path="/privacidade" element={<Privacy />} />
           <Route path="/users" element={user.role === 'admin' ? <Users /> : <Navigate to="/" replace />} />
         </Routes>
       </Layout>
@@ -46,7 +55,15 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <ThemeProvider><AuthProvider><AuthenticatedApp /></AuthProvider></ThemeProvider>;
+  return (
+    <ThemeProvider>
+      <ToastProvider>
+        <ConfirmProvider>
+          <AuthProvider><AuthenticatedApp /></AuthProvider>
+        </ConfirmProvider>
+      </ToastProvider>
+    </ThemeProvider>
+  );
 }
 
 export default App;

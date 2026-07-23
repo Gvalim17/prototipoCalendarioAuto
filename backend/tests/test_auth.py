@@ -1,13 +1,17 @@
 """Testes de regressão para o fluxo de autenticação: registro, login, CSRF,
-throttling, recuperação de senha e gestão de usuários por administradores.
-Esta é a parte mais sensível do sistema em termos de segurança — é a que
-mais se beneficia de cobertura automatizada.
+throttling, recuperação de senha, bootstrap do administrador e gestão de
+usuários. Esta é a parte mais sensível do sistema em termos de segurança —
+é a que mais se beneficia de cobertura automatizada.
 """
 
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 import app.routers.auth as auth_module
 import app.routers.users as users_module
+from app.database import SessionLocal
+from app.models.base import User
+from app.security import hash_password
 
 
 def _csrf_headers(client):
@@ -19,6 +23,21 @@ def _register(client, email="prof@example.com", password="senha-super-longa-123"
     return client.post("/auth/register", json={
         "name": name, "email": email, "password": password, "privacy_consent": True,
     })
+
+
+def _register_admin(client, email="admin@example.com", password="senha-super-longa-123456", name="Admin Teste"):
+    """Cria uma conta admin direto no banco (o bootstrap por token é testado
+    à parte, em sua própria seção) e autentica normalmente via login."""
+    db = SessionLocal()
+    try:
+        db.add(User(
+            name=name, email=email, password_hash=hash_password(password),
+            role="admin", created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ))
+        db.commit()
+    finally:
+        db.close()
+    return client.post("/auth/login", json={"email": email, "password": password})
 
 
 def _mock_email(monkeypatch, module):
@@ -33,30 +52,22 @@ def _mock_email(monkeypatch, module):
 
 # ── Registro ──────────────────────────────────────────────────────────────
 
-def test_register_first_user_becomes_admin_without_bootstrap_env(client):
+def test_register_default_role_is_professor(client):
     response = _register(client)
     assert response.status_code == 201
-    assert response.json()["role"] == "admin"
+    assert response.json()["role"] == "professor"
     # cookies de sessão devem ter sido emitidos
     assert client.cookies.get("calendario_session")
     assert client.cookies.get("calendario_csrf")
 
 
-def test_register_second_user_becomes_professor(client):
-    _register(client, email="admin@example.com")
-    response = _register(client, email="segunda@example.com")
-    assert response.status_code == 201
+def test_register_never_grants_admin_without_bootstrap_config(client):
+    """Sem BOOTSTRAP_ADMIN_EMAIL/TOKEN configurados, ninguém vira admin
+    sozinho — nem sendo a primeira conta do sistema."""
+    response = _register(client, email="primeira-conta@example.com")
     assert response.json()["role"] == "professor"
-
-
-def test_register_respects_bootstrap_admin_email(client, monkeypatch):
-    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "chefe@example.com")
-    other = _register(client, email="outra@example.com")
-    assert other.json()["role"] == "professor"
-
-    boss_client = client
-    boss = _register(boss_client, email="chefe@example.com")
-    assert boss.json()["role"] == "admin"
+    second = _register(client, email="segunda-conta@example.com")
+    assert second.json()["role"] == "professor"
 
 
 def test_register_rejects_duplicate_email(client):
@@ -87,6 +98,65 @@ def test_register_throttled_after_too_many_attempts_from_same_ip(client):
         assert response.status_code == 201
     blocked = _register(client, email="flood-extra@example.com")
     assert blocked.status_code == 429
+
+
+# ── Bootstrap do administrador (BOOTSTRAP_ADMIN_EMAIL + BOOTSTRAP_ADMIN_TOKEN) ──
+
+def test_bootstrap_email_without_token_is_rejected(client, monkeypatch):
+    """E-mail bate com o bootstrap, mas nenhum token foi enviado: a conta
+    nem deve ser criada (evita que alguém 'reserve' o e-mail do admin)."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "chefe@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "segredo-forte-123")
+    response = _register(client, email="chefe@example.com")
+    assert response.status_code == 403
+    assert client.get("/auth/me").status_code == 401
+
+
+def test_bootstrap_email_with_wrong_token_is_rejected(client, monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "chefe@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "segredo-forte-123")
+    response = client.post(
+        "/auth/register",
+        json={"name": "Invasor", "email": "chefe@example.com", "password": "senha-super-longa-123", "privacy_consent": True},
+        headers={"X-Bootstrap-Admin-Token": "chute-qualquer"},
+    )
+    assert response.status_code == 403
+
+
+def test_bootstrap_email_with_correct_token_becomes_admin(client, monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "chefe@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "segredo-forte-123")
+    response = client.post(
+        "/auth/register",
+        json={"name": "Chefe", "email": "chefe@example.com", "password": "senha-super-longa-123", "privacy_consent": True},
+        headers={"X-Bootstrap-Admin-Token": "segredo-forte-123"},
+    )
+    assert response.status_code == 201
+    assert response.json()["role"] == "admin"
+
+
+def test_bootstrap_email_does_not_affect_other_registrations(client, monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "chefe@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "segredo-forte-123")
+    response = _register(client, email="qualquer-outra@example.com")
+    assert response.status_code == 201
+    assert response.json()["role"] == "professor"
+
+
+def test_bootstrap_closes_after_first_admin_exists(client, monkeypatch):
+    """Mesmo com o token certo, o bootstrap só funciona enquanto nenhum
+    admin existir — depois disso, o caminho se fecha sozinho."""
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "chefe@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "segredo-forte-123")
+    _register_admin(client, email="outro-admin-ja-existente@example.com")
+    client.cookies.clear()
+
+    response = client.post(
+        "/auth/register",
+        json={"name": "Chefe Tarde Demais", "email": "chefe@example.com", "password": "senha-super-longa-123", "privacy_consent": True},
+        headers={"X-Bootstrap-Admin-Token": "segredo-forte-123"},
+    )
+    assert response.status_code == 403
 
 
 # ── Login ─────────────────────────────────────────────────────────────────
@@ -202,16 +272,16 @@ def test_password_reset_confirm_rejects_invalid_token(client):
 # ── Gestão de usuários (admin) ────────────────────────────────────────────
 
 def test_non_admin_cannot_list_users(client):
-    _register(client, email="owner@example.com")  # vira admin implícito
+    _register_admin(client, email="owner@example.com")
     client.cookies.clear()
-    _register(client, email="comum@example.com")  # segundo usuário = professor
+    _register(client, email="comum@example.com")  # conta comum = professor
     response = client.get("/users/")
     assert response.status_code == 403
 
 
 def test_admin_can_invite_list_promote_and_remove_users(client, monkeypatch):
     captured = _mock_email(monkeypatch, users_module)
-    _register(client, email="admin2@example.com")  # admin implícito
+    _register_admin(client, email="admin2@example.com")
 
     invite = client.post("/users/", json={"name": "Novo Professor", "email": "novo@example.com", "role": "professor"}, headers=_csrf_headers(client))
     assert invite.status_code == 201
@@ -231,7 +301,7 @@ def test_admin_can_invite_list_promote_and_remove_users(client, monkeypatch):
 
 
 def test_cannot_remove_the_last_admin(client):
-    _register(client, email="soloadmin@example.com")
+    _register_admin(client, email="soloadmin@example.com")
     me = client.get("/auth/me").json()
     response = client.delete(f"/users/{me['id']}", headers=_csrf_headers(client))
     # remoção da própria conta por essa rota é bloqueada explicitamente
@@ -239,7 +309,7 @@ def test_cannot_remove_the_last_admin(client):
 
 
 def test_admin_cannot_demote_the_last_admin(client):
-    _register(client, email="soloadmin2@example.com")
+    _register_admin(client, email="soloadmin2@example.com")
     me = client.get("/auth/me").json()
     response = client.patch(f"/users/{me['id']}/role", json={"role": "professor"}, headers=_csrf_headers(client))
     assert response.status_code == 422
@@ -247,6 +317,6 @@ def test_admin_cannot_demote_the_last_admin(client):
 
 def test_invite_rejects_duplicate_email(client, monkeypatch):
     _mock_email(monkeypatch, users_module)
-    _register(client, email="admin3@example.com")
+    _register_admin(client, email="admin3@example.com")
     response = client.post("/users/", json={"name": "Duplicado", "email": "admin3@example.com", "role": "professor"}, headers=_csrf_headers(client))
     assert response.status_code == 409

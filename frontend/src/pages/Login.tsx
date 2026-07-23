@@ -10,6 +10,8 @@ const getErrorMessage = (error: unknown) => {
   return detail || 'Não foi possível concluir a operação. Tente novamente.';
 };
 
+const REMEMBERED_EMAIL_KEY = 'calendario_remembered_email';
+
 const STRENGTH_LABELS = ['Muito fraca', 'Fraca', 'Razoável', 'Boa', 'Forte'];
 const STRENGTH_COLORS = ['bg-danger', 'bg-danger', 'bg-warn', 'bg-ok', 'bg-ok'];
 
@@ -38,11 +40,17 @@ const Login = () => {
   const [submitting, setSubmitting] = useState(false);
   const [privacyConsent, setPrivacyConsent] = useState(false);
   const [googleAvailable, setGoogleAvailable] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
 
   useEffect(() => {
     api.get<{ available: boolean }>('/auth/google/available')
       .then((response) => setGoogleAvailable(response.data.available))
       .catch(() => setGoogleAvailable(false));
+    const rememberedEmail = localStorage.getItem(REMEMBERED_EMAIL_KEY);
+    if (rememberedEmail) {
+      setEmail(rememberedEmail);
+      setRememberMe(true);
+    }
     const params = new URLSearchParams(window.location.search);
     if (window.location.pathname === '/reset-password') {
       setResetToken(params.get('token') || '');
@@ -72,6 +80,11 @@ const Login = () => {
     try {
       if (mode === 'login') {
         await login({ email, password });
+        if (rememberMe) {
+          localStorage.setItem(REMEMBERED_EMAIL_KEY, email);
+        } else {
+          localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+        }
       } else if (mode === 'register') {
         await register({ name, email, password, privacy_consent: privacyConsent });
       } else if (mode === 'forgot') {
@@ -166,7 +179,24 @@ const Login = () => {
               </label>
             )}
             {isReset && <label className="block"><span className="text-xs font-medium text-muted">Confirmar nova senha</span><input className="input-custom mt-1.5" type={showPassword ? 'text' : 'password'} required minLength={12} autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} /></label>}
-            {(isRegister || (!isForgot && !isReset && googleAvailable)) && <label className="flex items-start gap-2.5 text-xs text-muted leading-relaxed cursor-pointer"><input type="checkbox" required={isRegister} checked={privacyConsent} onChange={(e) => setPrivacyConsent(e.target.checked)} className="mt-0.5 accent-[rgb(var(--accent))]" /><span>Li e concordo com o tratamento dos meus dados para autenticação e gestão da conta.</span></label>}
+            {mode === 'login' && (
+              <label className="flex items-center gap-2.5 text-xs text-muted cursor-pointer">
+                <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="accent-[rgb(var(--accent))]" />
+                <span>Lembrar meu e-mail neste dispositivo</span>
+              </label>
+            )}
+            {(isRegister || (!isForgot && !isReset && googleAvailable)) && (
+              <label className="flex items-start gap-2.5 text-xs text-muted leading-relaxed cursor-pointer">
+                <input type="checkbox" required={isRegister} checked={privacyConsent} onChange={(e) => setPrivacyConsent(e.target.checked)} className="mt-0.5 accent-[rgb(var(--accent))]" />
+                <span>
+                  Li e concordo com os{' '}
+                  <a href="/termos" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline" onClick={(e) => e.stopPropagation()}>
+                    Termos de Uso e a Política de Privacidade
+                  </a>
+                  , incluindo o tratamento dos meus dados para autenticação e gestão da conta.
+                </span>
+              </label>
+            )}
             {error && <p role="alert" className="text-sm text-danger">{error}</p>}
             {notice && <p role="status" className="text-sm text-ok">{notice}</p>}
             <button className="btn-primary w-full" disabled={submitting} type="submit">{submitting ? 'Aguarde...' : isForgot ? 'Enviar link de recuperação' : isReset ? 'Salvar nova senha' : isRegister ? 'Criar conta' : 'Entrar'}</button>

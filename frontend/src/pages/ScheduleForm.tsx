@@ -8,8 +8,9 @@ import api from '../api/client';
 import {
   WEEKDAYS,
   type Course, type Discipline, type Holiday, type Module, type Recurrence, type HolidayPolicy,
-  type ScheduleConfigRead,
+  type ScheduleConfigRead, type ScheduleConflictCheckResponse, type ScheduleConflictItem,
 } from '../types/domain';
+import { useToast } from '../contexts/ToastContext';
 
 interface FormData {
   course_id: number;
@@ -46,6 +47,7 @@ const classHours = (start: string, end: string): number => {
 const ScheduleForm = () => {
   const { configId } = useParams<{ configId?: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
   const isEditing = !!configId;
 
   const [loading, setLoading] = useState(false);
@@ -60,6 +62,8 @@ const ScheduleForm = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [resolutions, setResolutions] = useState<Record<string, { action: 'auto' | 'manual'; resolved_date: string }>>({});
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [conflicts, setConflicts] = useState<ScheduleConflictCheckResponse | null>(null);
+  const [checkingConflicts, setCheckingConflicts] = useState(false);
 
   const [formData, setFormData] = useState<FormData>({
     course_id: 0,
@@ -106,7 +110,7 @@ const ScheduleForm = () => {
           holiday_policy: cfg.holiday_policy,
         });
       } catch (err) {
-        alert('Erro ao carregar cronograma para edição: ' + getErrorMessage(err));
+        toast.error('Erro ao carregar cronograma para edição: ' + getErrorMessage(err));
         navigate('/schedules');
       } finally {
         setLoadingConfig(false);
@@ -168,7 +172,7 @@ const ScheduleForm = () => {
 
   const handleGenerate = async () => {
     const error = validate();
-    if (error) { alert(error); return; }
+    if (error) { toast.error(error); return; }
     setLoading(true);
     try {
       const res = await api.post<GenerateResponse>(`/generate-schedule/`, buildConfig());
@@ -188,7 +192,7 @@ const ScheduleForm = () => {
         setStep(3);
       }
     } catch (err) {
-      alert('Erro ao gerar: ' + getErrorMessage(err));
+      toast.error('Erro ao gerar: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -197,7 +201,7 @@ const ScheduleForm = () => {
   const canApplyResolutions = result.skipped.every((s) => !!resolutions[s.date]?.resolved_date);
 
   const handleApplyResolutions = async () => {
-    if (!canApplyResolutions) { alert('Escolha uma data de reposição para todas as aulas em conflito.'); return; }
+    if (!canApplyResolutions) { toast.error('Escolha uma data de reposição para todas as aulas em conflito.'); return; }
     setLoading(true);
     try {
       const resolutionList = result.skipped.map((s) => {
@@ -209,9 +213,31 @@ const ScheduleForm = () => {
       if (res.data.dates.length > 0) setCurrentMonth(new Date(res.data.dates[0] + 'T00:00:00'));
       setStep(3);
     } catch (err) {
-      alert('Erro ao aplicar resoluções: ' + getErrorMessage(err));
+      toast.error('Erro ao aplicar resoluções: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleReviewClick = async () => {
+    setCheckingConflicts(true);
+    try {
+      const res = await api.post<ScheduleConflictCheckResponse>('/schedules/check-conflicts', {
+        dates: result.dates,
+        start_time: formData.start_time,
+        end_time: formData.end_time,
+        exclude_config_id: isEditing && configId ? Number(configId) : null,
+      });
+      if (res.data.overlaps.length > 0 || res.data.near.length > 0) {
+        setConflicts(res.data);
+      } else {
+        setShowSaveConfirm(true);
+      }
+    } catch {
+      // Checagem de conflito é só um aviso — se falhar, não trava o fluxo de salvar.
+      setShowSaveConfirm(true);
+    } finally {
+      setCheckingConflicts(false);
     }
   };
 
@@ -224,15 +250,15 @@ const ScheduleForm = () => {
       };
       if (isEditing) {
         await api.put(`/schedules/${configId}`, payload);
-        alert('Cronograma regenerado com sucesso!');
+        toast.success('Cronograma regenerado com sucesso!');
       } else {
         await api.post(`/schedules/`, payload);
-        alert('Cronograma salvo com sucesso!');
+        toast.success('Cronograma salvo com sucesso!');
       }
       setShowSaveConfirm(false);
       navigate('/schedules');
     } catch (err) {
-      alert('Erro ao salvar cronograma: ' + getErrorMessage(err));
+      toast.error('Erro ao salvar cronograma: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -264,7 +290,7 @@ const ScheduleForm = () => {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch {
-      alert('Erro ao exportar cronograma.');
+      toast.error('Erro ao exportar cronograma.');
     }
   };
 
@@ -569,13 +595,21 @@ const ScheduleForm = () => {
                     <SummaryRow label="Aulas perdidas" value={`${result.skipped.length}`} />
                   )}
                 </div>
-                <button onClick={() => setShowSaveConfirm(true)} disabled={loading || result.dates.length === 0} className="btn-primary w-full h-12">
-                  Revisar e confirmar<CheckCircle2 size={18} />
+                <button onClick={handleReviewClick} disabled={loading || checkingConflicts || result.dates.length === 0} className="btn-primary w-full h-12">
+                  {checkingConflicts ? 'Verificando conflitos...' : 'Revisar e confirmar'}<CheckCircle2 size={18} />
                 </button>
               </div>
             </div>
           </div>
         </div>
+      )}
+
+      {conflicts && (
+        <ScheduleConflictModal
+          conflicts={conflicts}
+          onCancel={() => setConflicts(null)}
+          onConfirm={() => { setConflicts(null); setShowSaveConfirm(true); }}
+        />
       )}
 
       {showSaveConfirm && (
@@ -677,6 +711,63 @@ const PreviewCalendar = ({ currentMonth, dates, holidays, isNa, onPrev, onNext }
     </div>
   );
 };
+
+const formatConflictDate = (d: string) =>
+  new Date(d + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'long' });
+
+const ConflictItemRow = ({ item }: { item: ScheduleConflictItem }) => (
+  <div className="flex items-center justify-between px-3 py-2 text-sm">
+    <div className="min-w-0">
+      <p className="text-ink truncate">{item.discipline_name} · {item.course_name}</p>
+      <p className="text-xs text-muted capitalize">{formatConflictDate(item.date)}</p>
+    </div>
+    <span className="text-xs text-muted shrink-0">{item.start_time?.slice(0, 5)} – {item.end_time?.slice(0, 5)}</span>
+  </div>
+);
+
+interface ScheduleConflictModalProps {
+  conflicts: ScheduleConflictCheckResponse;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+const ScheduleConflictModal = ({ conflicts, onCancel, onConfirm }: ScheduleConflictModalProps) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-sm">
+    <div className="card w-full max-w-lg p-6 shadow-2xl max-h-[85vh] flex flex-col">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="w-10 h-10 rounded-lg bg-warn/10 text-warn flex items-center justify-center shrink-0"><AlertCircle size={20} /></div>
+        <div>
+          <h3 className="text-lg font-semibold text-ink">Possível conflito de horário</h3>
+          <p className="text-sm text-muted mt-0.5">Você já tem outra(s) aula(s) marcada(s) nesse mesmo dia e horário. Confira e decida se quer continuar mesmo assim.</p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
+        {conflicts.overlaps.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-danger uppercase tracking-wide mb-2">Sobreposição de horário</p>
+            <div className="border border-line rounded-lg divide-y divide-line">
+              {conflicts.overlaps.map((item, i) => <ConflictItemRow key={i} item={item} />)}
+            </div>
+          </div>
+        )}
+        {conflicts.near.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-warn uppercase tracking-wide mb-2">Horário muito próximo (menos de 30 min de intervalo)</p>
+            <div className="border border-line rounded-lg divide-y divide-line">
+              {conflicts.near.map((item, i) => <ConflictItemRow key={i} item={item} />)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-3 mt-5">
+        <button onClick={onCancel} className="btn-ghost flex-1 h-11">Voltar e ajustar</button>
+        <button onClick={onConfirm} className="btn-primary flex-1 h-11">Continuar mesmo assim</button>
+      </div>
+    </div>
+  </div>
+);
 
 interface SaveConfirmModalProps {
   courseName?: string;

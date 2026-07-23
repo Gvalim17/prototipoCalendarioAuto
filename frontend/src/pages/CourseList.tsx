@@ -4,6 +4,13 @@ import { Plus, GraduationCap, ChevronRight, Trash2, ArrowLeft, BookOpen, Setting
 import { Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { ACADEMIC_LEVELS, levelLabel, type AcademicLevel, type Course, type Discipline, type Module } from '../types/domain';
 import LessonPlanModal from '../components/LessonPlanModal';
+import { useToast } from '../contexts/ToastContext';
+import { useConfirm } from '../contexts/ConfirmContext';
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+  return detail || fallback;
+};
 
 interface DisciplineSearchResult {
   id: number;
@@ -34,6 +41,8 @@ const CourseList = () => {
   const [filterLevel, setFilterLevel] = useState<string>('');
 
   const navigate = useNavigate();
+  const toast = useToast();
+  const confirm = useConfirm();
 
   useEffect(() => {
     fetchCourses();
@@ -73,7 +82,7 @@ const CourseList = () => {
   const saveCourse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (form.academic_level === 'outro' && !form.academic_level_other.trim()) {
-      alert('Informe o nome do nível acadêmico em "Outro".');
+      toast.error('Informe o nome do nível acadêmico em "Outro".');
       return;
     }
     const payload = {
@@ -96,19 +105,21 @@ const CourseList = () => {
       setEditing(null);
       fetchCourses();
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
-      alert(detail || 'Erro ao salvar curso.');
+      toast.error(getErrorMessage(err, 'Erro ao salvar curso.'));
     }
   };
 
   const deleteCourse = async (id: number) => {
-    if (window.confirm('Excluir este curso? Isso removerá todos os módulos e disciplinas vinculados.')) {
-      try {
-        await api.delete(`/courses/${id}`);
-        fetchCourses();
-      } catch {
-        alert('Erro ao excluir curso.');
-      }
+    const ok = await confirm({
+      message: 'Excluir este curso? Isso removerá todos os módulos e disciplinas vinculados.',
+      confirmLabel: 'Excluir', danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.delete(`/courses/${id}`);
+      fetchCourses();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Erro ao excluir curso.'));
     }
   };
 
@@ -264,6 +275,8 @@ const CourseDetails = () => {
   const [editingModule, setEditingModule] = useState<Module | null>(null);
   const [editingDiscipline, setEditingDiscipline] = useState<Discipline | null>(null);
   const [planningDiscipline, setPlanningDiscipline] = useState<Discipline | null>(null);
+  const toast = useToast();
+  const confirm = useConfirm();
 
   useEffect(() => {
     if (id) fetchDetails();
@@ -302,19 +315,22 @@ const CourseDetails = () => {
       await api.put(`/modules/${moduleId}`, { name, course_id: parseInt(id!) });
       setEditingModule(null);
       fetchDetails();
-    } catch {
-      alert('Erro ao atualizar módulo');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Erro ao atualizar módulo.'));
     }
   };
 
   const deleteModule = async (moduleId: number) => {
-    if (window.confirm('Excluir este módulo apagará todas as disciplinas vinculadas. Continuar?')) {
-      try {
-        await api.delete(`/modules/${moduleId}`);
-        fetchDetails();
-      } catch {
-        alert('Erro ao excluir módulo.');
-      }
+    const ok = await confirm({
+      message: 'Excluir este módulo apagará todas as disciplinas vinculadas. Continuar?',
+      confirmLabel: 'Excluir', danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.delete(`/modules/${moduleId}`);
+      fetchDetails();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Erro ao excluir módulo.'));
     }
   };
 
@@ -349,9 +365,8 @@ const CourseDetails = () => {
       setDiscSearchResults([]);
       setSelectedModuleId(null);
       fetchDetails();
-    } catch (error) {
-      console.error('Erro ao adicionar disciplina:', error);
-      alert('Erro ao adicionar disciplina. Verifique se o código já existe.');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Erro ao adicionar disciplina. Verifique se o código já existe.'));
     }
   };
 
@@ -360,19 +375,19 @@ const CourseDetails = () => {
       await api.put(`/disciplines/${discId}`, { name, code, module_id: moduleId });
       setEditingDiscipline(null);
       fetchDetails();
-    } catch {
-      alert('Erro ao atualizar disciplina');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Erro ao atualizar disciplina.'));
     }
   };
 
   const deleteDiscipline = async (discId: number) => {
-    if (window.confirm('Excluir esta disciplina?')) {
-      try {
-        await api.delete(`/disciplines/${discId}`);
-        fetchDetails();
-      } catch {
-        alert('Erro ao excluir disciplina');
-      }
+    const ok = await confirm({ message: 'Excluir esta disciplina?', confirmLabel: 'Excluir', danger: true });
+    if (!ok) return;
+    try {
+      await api.delete(`/disciplines/${discId}`);
+      fetchDetails();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Erro ao excluir disciplina.'));
     }
   };
 

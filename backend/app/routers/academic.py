@@ -84,7 +84,14 @@ def delete_course(course_id: int, db: Session = Depends(get_db)):
     db_course = get_course_or_404(db, course_id)
     course_name = db_course.name
     db.delete(db_course)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Não é possível excluir este curso porque há cronogramas cadastrados para ele. Exclua os cronogramas associados primeiro.",
+        )
     logger.warning(f"Curso excluído: id={course_id} nome='{course_name}'", extra={"event": "course_deleted"})
     return {"message": "Curso excluído com sucesso"}
 
@@ -124,7 +131,14 @@ def update_module(module_id: int, module_update: ModuleUpdate, db: Session = Dep
 def delete_module(module_id: int, db: Session = Depends(get_db)):
     db_mod = get_module_or_404(db, module_id)
     db.delete(db_mod)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Não é possível excluir este módulo porque há cronogramas cadastrados para ele ou suas disciplinas. Exclua os cronogramas associados primeiro.",
+        )
     return {"message": "Módulo excluído com sucesso"}
 
 
@@ -170,7 +184,14 @@ def update_discipline(discipline_id: int, disc_update: DisciplineUpdate, db: Ses
 def delete_discipline(discipline_id: int, db: Session = Depends(get_db)):
     db_disc = get_discipline_or_404(db, discipline_id)
     db.delete(db_disc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Não é possível excluir esta disciplina porque há cronogramas cadastrados para ela. Exclua os cronogramas associados primeiro.",
+        )
     return {"message": "Disciplina excluída com sucesso"}
 
 
