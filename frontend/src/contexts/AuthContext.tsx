@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import api, { AUTH_EXPIRED_EVENT } from '../api/client';
+import api, { AUTH_EXPIRED_EVENT, getCsrfToken, setCsrfToken } from '../api/client';
 
 export interface AuthUser {
   id: number;
@@ -7,6 +7,10 @@ export interface AuthUser {
   email: string;
   role: string;
   created_at: string;
+}
+
+interface AuthSessionResponse extends AuthUser {
+  csrf_token: string;
 }
 
 interface Credentials {
@@ -38,7 +42,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     api.get<AuthUser>('/auth/me')
-      .then((response) => setUser(response.data))
+      .then(async (response) => {
+        setUser(response.data);
+        // Nova aba, recarregamento sem sessionStorage, ou retorno do OAuth do
+        // Google: ainda não temos o CSRF token em memória, buscamos um novo.
+        if (!getCsrfToken()) {
+          const csrfResponse = await api.post<{ csrf_token: string }>('/auth/csrf');
+          setCsrfToken(csrfResponse.data.csrf_token);
+        }
+      })
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
   }, []);
@@ -57,13 +69,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const clearSessionExpired = useCallback(() => setSessionExpired(false), []);
 
   const login = useCallback(async (credentials: Credentials) => {
-    const response = await api.post<AuthUser>('/auth/login', credentials);
+    const response = await api.post<AuthSessionResponse>('/auth/login', credentials);
+    setCsrfToken(response.data.csrf_token);
     setUser(response.data);
     setSessionExpired(false);
   }, []);
 
   const register = useCallback(async (registration: Registration) => {
-    const response = await api.post<AuthUser>('/auth/register', registration);
+    const response = await api.post<AuthSessionResponse>('/auth/register', registration);
+    setCsrfToken(response.data.csrf_token);
     setUser(response.data);
     setSessionExpired(false);
   }, []);
@@ -71,8 +85,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const logout = useCallback(async () => {
     try {
       await api.post('/auth/logout');
+    } catch {
+      // Sessão já pode estar inválida no servidor (ex.: conta acabou de ser
+      // excluída, ou sessão expirou em outra aba) — segue para limpar o
+      // estado local mesmo assim, o objetivo é sempre terminar deslogado.
     } finally {
       setUser(null);
+      setCsrfToken(null);
     }
   }, []);
 

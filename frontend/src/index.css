@@ -84,3 +84,9 @@ body {
 .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: rgb(var(--line)); border-radius: 8px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.toast-enter { animation: toast-enter 0.18s ease-out; }

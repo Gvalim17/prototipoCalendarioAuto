@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Bell, CalendarPlus, CheckCheck, Copy, Link2, Mail, RefreshCw, Save } from 'lucide-react';
 import api from '../api/client';
 import type { AlertNotification, AlertPreference, CalendarTokenInfo } from '../types/domain';
+import { useConfirm } from '../contexts/ConfirmContext';
 
 const OFFSETS = [
   { value: 4320, label: '3 dias antes' },
@@ -20,6 +21,7 @@ const Alerts = () => {
   const [subscribeUrl, setSubscribeUrl] = useState('');
   const [rotating, setRotating] = useState(false);
   const [copied, setCopied] = useState(false);
+  const confirm = useConfirm();
 
   const fetchData = async () => {
     const [pref, items, token] = await Promise.all([
@@ -70,7 +72,13 @@ const Alerts = () => {
   };
 
   const rotateToken = async () => {
-    if (tokenInfo?.has_token && !window.confirm('Gerar um novo link invalida o link atual — quem já assinou vai parar de receber atualizações até colar o novo. Continuar?')) return;
+    if (tokenInfo?.has_token) {
+      const ok = await confirm({
+        message: 'Gerar um novo link invalida o link atual — quem já assinou vai parar de receber atualizações até colar o novo. Continuar?',
+        confirmLabel: 'Gerar novo link', danger: true,
+      });
+      if (!ok) return;
+    }
     setRotating(true);
     try {
       const res = await api.post<{ token: string; path: string }>('/alerts/calendar-token/rotate');

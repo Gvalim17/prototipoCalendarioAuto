@@ -41,6 +41,23 @@ class CurrentUserRead(BaseModel):
         from_attributes = True
 
 
+class AuthSessionRead(CurrentUserRead):
+    """CurrentUserRead + csrf_token em texto plano.
+
+    O cookie calendario_csrf é setado no domínio do backend; como front (Vercel)
+    e backend (Render) ficam em domínios diferentes em produção, o JS do front
+    não consegue ler esse cookie via document.cookie. Por isso o token também
+    precisa vir no corpo da resposta, protegido pelo CORS (só a origem
+    autorizada consegue ler o body de uma resposta com credentials).
+    """
+
+    csrf_token: str
+
+
+class CsrfTokenRead(BaseModel):
+    csrf_token: str
+
+
 class PrivacyExportRead(BaseModel):
     name: str
     email: str

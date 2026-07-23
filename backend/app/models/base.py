@@ -210,12 +210,18 @@ class ScheduleConfig(Base):
             return [self.day_of_week]
         return []
 
+class ScheduledClassStatus(enum.Enum):
+    SCHEDULED = "scheduled"
+    CANCELLED = "cancelled"
+
 class ScheduledClass(Base):
     __tablename__ = "scheduled_classes"
     id = Column(Integer, primary_key=True, index=True)
     config_id = Column(Integer, ForeignKey("schedule_configs.id"), nullable=False)
     date = Column(Date, nullable=False)
     order = Column(Integer, nullable=False)  # Aula 1, 2, 3...
+    status = Column(Enum(ScheduledClassStatus), nullable=False, default=ScheduledClassStatus.SCHEDULED)
+    change_reason = Column(Text, nullable=True)  # motivo da última alteração pontual (troca de dia ou cancelamento)
 
     config = relationship("ScheduleConfig", back_populates="classes")
 

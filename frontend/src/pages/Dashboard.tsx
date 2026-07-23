@@ -3,8 +3,10 @@ import { GraduationCap, BookOpen, CalendarClock, CalendarCheck, ChevronRight, Do
 import { Link } from 'react-router-dom';
 import api from '../api/client';
 import { levelLabel, type CalendarEvent, type Course, type Holiday, type Stats } from '../types/domain';
+import { useToast } from '../contexts/ToastContext';
 
 const Dashboard = () => {
+  const toast = useToast();
   const [stats, setStats] = useState<Stats>({ courses: 0, modules: 0, disciplines: 0, scheduled_classes: 0 });
   const [nextHolidays, setNextHolidays] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,7 @@ const Dashboard = () => {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch {
-      alert('Erro ao exportar cronograma.');
+      toast.error('Erro ao exportar cronograma.');
     }
   };
 

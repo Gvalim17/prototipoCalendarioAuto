@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import date, time
 from typing import List, Literal, Optional
-from ..models.base import DeliveryFormat, RecurrenceType, AcademicLevel, HolidayPolicy
+from ..models.base import DeliveryFormat, RecurrenceType, AcademicLevel, HolidayPolicy, ScheduledClassStatus
 
 # --- Course ---
 class CourseBase(BaseModel):
@@ -178,6 +178,32 @@ class ScheduledClassCreate(BaseModel):
     date: date
     order: int = Field(..., gt=0)
 
+class ScheduledClassUpdate(BaseModel):
+    """Edição pontual de uma aula: troca de data ou cancelamento. O motivo é
+    sempre obrigatório e nenhuma das duas ações é bloqueada por feriado/recesso
+    — a decisão de alterar um dia de aula ou cancelar é sempre do professor."""
+    date: date
+    reason: str = Field(..., min_length=3, max_length=500)
+    cancelled: bool = False
+
+# --- Conflict check (mesmo professor, outra aula no mesmo dia) ---
+class ScheduleConflictItem(BaseModel):
+    date: date
+    course_name: str
+    discipline_name: str
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+
+class ScheduleConflictCheckRequest(BaseModel):
+    dates: List[date]
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    exclude_config_id: Optional[int] = None
+
+class ScheduleConflictCheckResponse(BaseModel):
+    overlaps: List[ScheduleConflictItem] = []
+    near: List[ScheduleConflictItem] = []
+
 class FullScheduleCreate(BaseModel):
     config: ScheduleConfigBase
     classes: List[ScheduledClassCreate]
@@ -186,6 +212,8 @@ class ScheduledClassRead(BaseModel):
     id: int
     date: date
     order: int
+    status: ScheduledClassStatus
+    change_reason: Optional[str] = None
     class Config:
         from_attributes=True
 
@@ -211,6 +239,10 @@ class ScheduleConfigRead(ScheduleConfigBase):
     course_name: str
     module_name: str
     discipline_name: str
+    institution: Optional[str] = None
+    academic_level: Optional[AcademicLevel] = None
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
     num_classes: Optional[int] = None
     workload: Optional[int] = None
 

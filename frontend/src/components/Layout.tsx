@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon } from 'lucide-react';
+import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon, ShieldCheck } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,6 +39,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <NavItem to="/schedules" icon={<CalendarDays size={18} />} label="Cronogramas" active={location.pathname === '/schedules'} />
           <NavItem to="/holidays" icon={<CalendarClock size={18} />} label="Feriados e Recessos" active={location.pathname === '/holidays'} />
           <NavItem to="/alerts" icon={<Bell size={18} />} label="Alertas" active={location.pathname === '/alerts'} />
+          <NavItem to="/privacidade" icon={<ShieldCheck size={18} />} label="Privacidade" active={location.pathname === '/privacidade'} />
           {user?.role === 'admin' && (
             <NavItem to="/logs" icon={<ScrollText size={18} />} label="Logs do Sistema" active={location.pathname === '/logs'} />
           )}
