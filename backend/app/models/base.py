@@ -147,7 +147,7 @@ class Module(Base):
     __tablename__ = "modules"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)
     # Denormalizado a partir de course.owner_id na criação — evita join extra
     # em toda checagem de posse/listagem, no mesmo padrão do owner_id em
     # ScheduleConfig/LessonPlan/LessonScript.
@@ -162,7 +162,7 @@ class Discipline(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     code = Column(String, nullable=False)  # Sigla ou código da disciplina
-    module_id = Column(Integer, ForeignKey("modules.id"), nullable=False)
+    module_id = Column(Integer, ForeignKey("modules.id"), nullable=False, index=True)
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     module = relationship("Module", back_populates="disciplines")
@@ -186,9 +186,9 @@ class Recess(Base):
 class ScheduleConfig(Base):
     __tablename__ = "schedule_configs"
     id = Column(Integer, primary_key=True, index=True)
-    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
-    module_id = Column(Integer, ForeignKey("modules.id"), nullable=False)
-    discipline_id = Column(Integer, ForeignKey("disciplines.id"), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)
+    module_id = Column(Integer, ForeignKey("modules.id"), nullable=False, index=True)
+    discipline_id = Column(Integer, ForeignKey("disciplines.id"), nullable=False, index=True)
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     format = Column(Enum(DeliveryFormat), nullable=False)
@@ -227,8 +227,8 @@ class ScheduledClassStatus(enum.Enum):
 class ScheduledClass(Base):
     __tablename__ = "scheduled_classes"
     id = Column(Integer, primary_key=True, index=True)
-    config_id = Column(Integer, ForeignKey("schedule_configs.id"), nullable=False)
-    date = Column(Date, nullable=False)
+    config_id = Column(Integer, ForeignKey("schedule_configs.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
     order = Column(Integer, nullable=False)  # Aula 1, 2, 3...
     status = Column(Enum(ScheduledClassStatus), nullable=False, default=ScheduledClassStatus.SCHEDULED)
     change_reason = Column(Text, nullable=True)  # motivo da última alteração pontual (troca de dia ou cancelamento)

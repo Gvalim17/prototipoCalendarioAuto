@@ -163,3 +163,28 @@ def test_generate_schedule_rejects_another_professors_course(client):
         "holiday_policy": "reschedule",
     })
     assert response.status_code == 403
+
+
+def test_get_single_course_returns_nested_modules_and_disciplines(client):
+    _register(client, "dono-get-curso@example.com")
+    course_id = _create_course(client, name="Curso Detalhe")
+    module_id = _create_module(client, course_id)
+    _create_discipline(client, module_id, name="Disciplina Detalhe", code="DET-1")
+
+    response = client.get(f"/courses/{course_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == course_id
+    assert len(body["modules"]) == 1
+    assert body["modules"][0]["id"] == module_id
+    assert len(body["modules"][0]["disciplines"]) == 1
+    assert body["modules"][0]["disciplines"][0]["code"] == "DET-1"
+
+
+def test_get_single_course_denies_another_professor(client):
+    _register(client, "dono-get-curso2@example.com")
+    course_id = _create_course(client, name="Curso Privado")
+
+    other = TestClient(app)
+    _register(other, "invasor-get-curso@example.com")
+    assert other.get(f"/courses/{course_id}").status_code == 403

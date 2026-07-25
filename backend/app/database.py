@@ -20,7 +20,26 @@ def get_database_url() -> str:
 DATABASE_URL = get_database_url()
 CONNECT_ARGS = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS)
+# pool_pre_ping + pool_recycle são essenciais com Postgres serverless (Neon):
+# o provedor suspende/derruba conexões ociosas, e sem isso o SQLAlchemy tenta
+# reusar uma conexão morta do pool — a requisição trava até o timeout de rede
+# em vez de simplesmente abrir uma conexão nova. pool_pre_ping testa a conexão
+# com um SELECT 1 barato antes de cada uso; pool_recycle força reciclagem
+# antes que o servidor a feche por conta própria.
+# pool_size/max_overflow ficam explícitos (em vez do default do SQLAlchemy)
+# para o total de conexões ser previsível: cada worker do uvicorn tem seu
+# próprio engine/pool (processos separados), então o teto real é
+# (pool_size + max_overflow) × número de workers (ver WEB_CONCURRENCY em
+# render.yaml). Se o número de workers crescer, use a connection string com
+# sufixo "-pooler" do Neon em produção (ver .env.example).
+POOL_KWARGS = {} if DATABASE_URL.startswith("sqlite") else {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+    "pool_size": 5,
+    "max_overflow": 5,
+}
+
+engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS, **POOL_KWARGS)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

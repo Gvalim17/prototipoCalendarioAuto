@@ -71,6 +71,21 @@ def list_courses(
     return query.all()
 
 
+@router.get("/courses/{course_id}", response_model=CourseRead)
+@router.get("/mbas/{course_id}", response_model=CourseRead, include_in_schema=False)
+def get_course(course_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db_course = (
+        db.query(Course)
+        .options(joinedload(Course.modules).joinedload(Module.disciplines))
+        .filter(Course.id == course_id)
+        .first()
+    )
+    if not db_course:
+        raise HTTPException(status_code=404, detail="Curso não encontrado")
+    ensure_owner_or_admin(db_course.owner_id, user, resource="Este curso")
+    return db_course
+
+
 @router.put("/courses/{course_id}", response_model=CourseRead)
 @router.put("/mbas/{course_id}", response_model=CourseRead, include_in_schema=False)
 def update_course(course_id: int, course_update: CourseUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
