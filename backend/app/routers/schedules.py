@@ -4,7 +4,7 @@ import io
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from ..database import get_db
 from ..dependencies import ensure_owner_or_admin, get_current_user, require_admin_action, validate_schedule_references
@@ -272,11 +272,21 @@ def save_schedule(
 
 @router.get("/schedules/configs/", response_model=List[ScheduleConfigRead])
 def list_schedule_configs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # contains_eager reaproveita os joins de filtro para popular course/module/
+    # discipline sem consultas extras; owner é populado por joinedload à parte
+    # (evita N+1: sem isso, cada config disparava 4 queries extras no loop de
+    # _config_to_read).
     query = (
         db.query(ScheduleConfig)
         .join(Course, ScheduleConfig.course_id == Course.id)
         .join(Module, ScheduleConfig.module_id == Module.id)
         .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .options(
+            contains_eager(ScheduleConfig.course),
+            contains_eager(ScheduleConfig.module),
+            contains_eager(ScheduleConfig.discipline),
+            joinedload(ScheduleConfig.owner),
+        )
     )
     if user.role != "admin":
         query = query.filter(ScheduleConfig.owner_id == user.id)
@@ -431,6 +441,11 @@ def export_schedules_xlsx(user: User = Depends(get_current_user), db: Session = 
         .join(Course, ScheduleConfig.course_id == Course.id)
         .join(Module, ScheduleConfig.module_id == Module.id)
         .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .options(
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.course),
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.module),
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.discipline),
+        )
     )
     if user.role != "admin":
         query = query.filter(ScheduleConfig.owner_id == user.id)
@@ -514,6 +529,10 @@ def list_all_scheduled_classes(user: User = Depends(get_current_user), db: Sessi
         .join(ScheduleConfig)
         .join(Course, ScheduleConfig.course_id == Course.id)
         .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .options(
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.course),
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.discipline),
+        )
     )
     if user.role != "admin":
         query = query.filter(ScheduleConfig.owner_id == user.id)

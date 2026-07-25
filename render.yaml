@@ -4,8 +4,20 @@ services:
     env: python
     plan: free
     # Defina "Root Directory" como "backend" nas configurações do Render
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # `alembic upgrade head` roda no build, antes da nova versão receber
+    # tráfego — sem isso, mudanças de schema (novas colunas/índices/tabelas)
+    # nunca chegam ao Postgres de produção e a API quebra ou serve dados
+    # desatualizados silenciosamente.
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    # --workers N roda múltiplos processos uvicorn. Cada rota já é atendida em
+    # thread separada (rotas são `def`, não `async def`), então 1 worker já
+    # atende requisições concorrentes — não travam entre si. Múltiplos
+    # workers só ajudam de verdade com mais de 1 vCPU disponível; no plano
+    # free (1 vCPU compartilhada, 512MB) rodar 2 processos com pandas/numpy/
+    # pillow/reportlab carregados arrisca ficar sem memória sob carga. Suba
+    # este número (via env var, sem editar este arquivo) só depois de
+    # migrar para um plano com mais recursos.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers ${WEB_CONCURRENCY:-1}
     envVars:
       - key: DATABASE_URL
         sync: false  # Preenchido manualmente no painel do Render com a URL do Neon
@@ -13,3 +25,5 @@ services:
         sync: false  # Ex: https://seu-projeto.vercel.app
       - key: PYTHON_VERSION
         value: "3.11.0"
+      - key: WEB_CONCURRENCY
+        value: "1"

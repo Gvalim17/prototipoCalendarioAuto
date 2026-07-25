@@ -285,15 +285,12 @@ const CourseDetails = () => {
 
   const fetchDetails = async () => {
     try {
-      const courseRes = await api.get<Course[]>(`/courses/`);
-      setCourse(courseRes.data.find((c) => c.id === parseInt(id!)) ?? null);
-
-      const modRes = await api.get<Module[]>(`/courses/${id}/modules`);
-      const withDisc = await Promise.all(modRes.data.map(async (mod) => {
-        const discRes = await api.get<Discipline[]>(`/modules/${mod.id}/disciplines`);
-        return { ...mod, disciplines: discRes.data };
-      }));
-      setModules(withDisc);
+      // /courses/{id} já retorna módulos e disciplinas aninhados numa única
+      // consulta — evita buscar o catálogo inteiro e disparar 1 requisição
+      // extra por módulo só para montar a tela de detalhes.
+      const courseRes = await api.get<Course>(`/courses/${id}`);
+      setCourse(courseRes.data);
+      setModules(courseRes.data.modules);
     } catch (error) {
       console.error('Erro ao buscar detalhes:', error);
     }

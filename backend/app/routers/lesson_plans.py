@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..dependencies import ensure_owner_or_admin, get_current_user, get_discipline_or_404
@@ -48,7 +48,12 @@ def _get_owned_scheduled_class(db: Session, scheduled_class_id: int, user: User)
 
 
 def _get_owned_attachment(db: Session, attachment_id: int, user: User) -> LessonAttachment:
-    attachment = db.query(LessonAttachment).filter(LessonAttachment.id == attachment_id).first()
+    attachment = (
+        db.query(LessonAttachment)
+        .options(joinedload(LessonAttachment.lesson_script).joinedload(LessonScript.scheduled_class).joinedload(ScheduledClass.config))
+        .filter(LessonAttachment.id == attachment_id)
+        .first()
+    )
     if not attachment:
         raise HTTPException(status_code=404, detail="Anexo não encontrado.")
     ensure_owner_or_admin(attachment.lesson_script.scheduled_class.config.owner_id, user, resource="Este anexo")

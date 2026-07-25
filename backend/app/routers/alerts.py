@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..dependencies import get_current_user
-from ..models.base import AlertNotification, AlertPreference, ScheduledClass, User
+from ..models.base import AlertNotification, AlertPreference, ScheduleConfig, ScheduledClass, User
 from ..schemas.alert_schemas import AlertNotificationRead, AlertPreferenceRead, AlertPreferenceUpdate, CalendarTokenRead
 from ..security import hash_token, new_token
 from ..services.alert_dispatcher import dispatch_due_alerts
@@ -94,6 +94,10 @@ def _build_ics(db: Session, user: User) -> str:
         db.query(ScheduledClass)
         .join(ScheduledClass.config)
         .filter(ScheduledClass.config.has(owner_id=user.id))
+        .options(
+            joinedload(ScheduledClass.config).joinedload(ScheduleConfig.course),
+            joinedload(ScheduledClass.config).joinedload(ScheduleConfig.discipline),
+        )
         .order_by(ScheduledClass.date)
         .all()
     )

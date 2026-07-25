@@ -2,12 +2,14 @@ import os
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
 from .database import init_db
 from .logging_config import get_logger, setup_logging
 from .middleware.request_logging import RequestLoggingMiddleware
+from .middleware.security_headers import SecurityHeadersMiddleware
 from .dependencies import get_current_user, require_csrf
 from .routers import academic, alerts, auth, holidays, lesson_plans, logs, recesses, schedules, users
 
@@ -40,6 +42,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.exception_handler(IntegrityError)
