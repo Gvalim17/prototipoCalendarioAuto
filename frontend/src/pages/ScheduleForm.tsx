@@ -12,6 +12,7 @@ import {
   type ScheduleConfigRead, type ScheduleConflictCheckResponse, type ScheduleConflictItem,
 } from '../types/domain';
 import { useToast } from '../contexts/ToastContext';
+import { formatHours } from '../utils/format';
 
 interface FormData {
   course_id: number;
@@ -47,16 +48,6 @@ const classHours = (start: string, end: string): number => {
   return Math.max(0, (eh * 60 + em - (sh * 60 + sm)) / 60);
 };
 
-// Formata horas decimais (ex: carga horária = num_aulas * duração/aula, que
-// raramente fecha em número redondo) como "1h40" em vez de "1.6666666h".
-const formatHours = (hours: number): string => {
-  const totalMinutes = Math.round(hours * 60);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  if (h === 0) return `${m}min`;
-  if (m === 0) return `${h}h`;
-  return `${h}h${String(m).padStart(2, '0')}`;
-};
 
 const ScheduleForm = () => {
   const { configId } = useParams<{ configId?: string }>();

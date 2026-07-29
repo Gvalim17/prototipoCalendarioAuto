@@ -16,6 +16,9 @@ import Users from './pages/Users';
 import LessonPlanner from './pages/LessonPlanner';
 import Terms from './pages/Terms';
 import Privacy from './pages/Privacy';
+import Reports from './pages/Reports';
+import Help from './pages/Help';
+import { TourProvider } from './contexts/TourContext';
 
 function AuthenticatedApp() {
   const { user, loading } = useAuth();
@@ -34,22 +37,26 @@ function AuthenticatedApp() {
 
   return (
     <Router>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/courses/*" element={<CourseList />} />
-          <Route path="/mbas/*" element={<Navigate to="/courses" replace />} />
-          <Route path="/holidays" element={<HolidayRecessList />} />
-          <Route path="/schedules" element={<ScheduleList />} />
-          <Route path="/schedules/:configId/plan" element={<LessonPlanner />} />
-          <Route path="/generate" element={<ScheduleForm />} />
-          <Route path="/generate/:configId" element={<ScheduleForm />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/alerts" element={<Alerts />} />
-          <Route path="/privacidade" element={<Privacy />} />
-          <Route path="/users" element={user.role === 'admin' ? <Users /> : <Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
+      <TourProvider userId={user.id}>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/courses/*" element={<CourseList />} />
+            <Route path="/mbas/*" element={<Navigate to="/courses" replace />} />
+            <Route path="/holidays" element={<HolidayRecessList />} />
+            <Route path="/schedules" element={<ScheduleList />} />
+            <Route path="/schedules/:configId/plan" element={<LessonPlanner />} />
+            <Route path="/generate" element={<ScheduleForm />} />
+            <Route path="/generate/:configId" element={<ScheduleForm />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/alerts" element={<Alerts />} />
+            <Route path="/privacidade" element={<Privacy />} />
+            <Route path="/relatorios" element={<Reports />} />
+            <Route path="/ajuda" element={<Help />} />
+            <Route path="/users" element={user.role === 'admin' ? <Users /> : <Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      </TourProvider>
     </Router>
   );
 }

@@ -197,3 +197,28 @@ def test_cancel_scheduled_class_excludes_it_from_conflict_check(client):
         "dates": ["2026-11-10"], "start_time": "19:00:00", "end_time": "21:00:00",
     })
     assert check.json()["overlaps"] == [] and check.json()["near"] == []
+
+
+def test_reports_aggregates_hours_by_discipline_institution_and_modality(client):
+    owner_id = _register(client, "relatorios@example.com")
+    _seed_schedule(owner_id, "relatorios", start_time=time(19, 0), end_time=time(22, 0), on_date=date(2026, 9, 1))
+
+    response = client.get("/reports/")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_classes"] == 1
+    assert body["total_hours"] == 3.0
+    assert body["by_discipline"][0] == {"label": "Disciplina Teste", "classes": 1, "hours": 3.0}
+    assert body["by_institution"][0] == {"label": "Uni X", "classes": 1, "hours": 3.0}
+    assert body["by_modality"] == {"presencial": 1, "remoto": 0}
+
+
+def test_reports_isolated_per_professor(client):
+    owner_id = _register(client, "relatorios-dono@example.com")
+    _seed_schedule(owner_id, "relatorios-dono")
+
+    other = TestClient(app)
+    _register(other, "relatorios-outro@example.com")
+    response = other.get("/reports/")
+    assert response.status_code == 200
+    assert response.json()["total_classes"] == 0

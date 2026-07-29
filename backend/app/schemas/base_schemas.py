@@ -277,6 +277,35 @@ class StatsRead(BaseModel):
     disciplines: int
     scheduled_classes: int
 
+class ReportBreakdownItem(BaseModel):
+    label: str
+    classes: int
+    hours: float
+
+class ModalityBreakdown(BaseModel):
+    presencial: int = 0
+    remoto: int = 0
+
+class ReportsRead(BaseModel):
+    total_classes: int
+    total_hours: float
+    by_discipline: List[ReportBreakdownItem] = []
+    by_institution: List[ReportBreakdownItem] = []
+    by_modality: ModalityBreakdown = ModalityBreakdown()
+
+class ScheduleImportRowError(BaseModel):
+    row: Optional[int] = None
+    field: str
+    message: str
+
+class ScheduleImportResult(BaseModel):
+    message: str
+    imported_configs: int
+    imported_classes: int
+    skipped_groups: int
+    total_rows: int
+    errors: List[ScheduleImportRowError] = []
+
 class PreviewExportRequest(BaseModel):
     course_name: str
     module_name: str

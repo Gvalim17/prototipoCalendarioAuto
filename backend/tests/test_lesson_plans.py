@@ -9,7 +9,7 @@ from app.database import SessionLocal
 from app.main import app
 from app.models.base import (
     AcademicLevel, Course, DeliveryFormat, Discipline, HolidayPolicy,
-    Module, RecurrenceType, ScheduleConfig, ScheduledClass,
+    Module, RecurrenceType, ScheduleConfig, ScheduledClass, User,
 )
 
 
@@ -60,20 +60,24 @@ def _seed_owned_lesson(owner_id, email):
 
 def _seed_lesson(email="prof-plan@example.com"):
     """Cria curso/módulo/disciplina/cronograma/aula direto no banco (mais
-    rápido que passar pelo fluxo completo de geração de cronograma)."""
+    rápido que passar pelo fluxo completo de geração de cronograma), já
+    isolado para o professor registrado com `email` — como qualquer catálogo
+    criado por um usuário autenticado seria na prática."""
     db = SessionLocal()
     try:
-        course = Course(name=f"Curso {email}", academic_level=AcademicLevel.MBA, year=2026)
+        owner = db.query(User).filter(User.email == email).first()
+        owner_id = owner.id if owner else None
+        course = Course(name=f"Curso {email}", academic_level=AcademicLevel.MBA, year=2026, owner_id=owner_id)
         db.add(course)
         db.flush()
-        module = Module(name="Módulo 1", course_id=course.id)
+        module = Module(name="Módulo 1", course_id=course.id, owner_id=owner_id)
         db.add(module)
         db.flush()
-        discipline = Discipline(name="Disciplina Teste", code=f"D-{email}", module_id=module.id)
+        discipline = Discipline(name="Disciplina Teste", code=f"D-{email}", module_id=module.id, owner_id=owner_id)
         db.add(discipline)
         db.flush()
         config = ScheduleConfig(
-            course_id=course.id, module_id=module.id, discipline_id=discipline.id,
+            course_id=course.id, module_id=module.id, discipline_id=discipline.id, owner_id=owner_id,
             format=DeliveryFormat.PRESENCIAL, start_date=date(2026, 10, 5), recurrence=RecurrenceType.NA,
             start_time=time(19, 0), end_time=time(22, 0), holiday_policy=HolidayPolicy.RESCHEDULE,
         )
@@ -299,6 +303,29 @@ def test_professor_cannot_read_or_write_another_professors_lesson_script(client)
         f"/lessons/{lesson_id}/script/attachments", headers=_csrf_headers(intruder),
         files={"file": ("teste.txt", b"conteudo", "text/plain")},
     ).status_code == 403
+
+
+def test_non_admin_cannot_access_orphaned_pre_isolation_discipline(client):
+    """Disciplinas criadas antes do isolamento por professor existir ficam com
+    owner_id nulo. Um professor comum não pode lê-las/reivindicá-las só por
+    adivinhar o ID — isso seria um vazamento de dados de outro professor."""
+    db = SessionLocal()
+    try:
+        course = Course(name="Curso Legado", academic_level=AcademicLevel.MBA, year=2026)
+        db.add(course)
+        db.flush()
+        module = Module(name="Módulo Legado", course_id=course.id)
+        db.add(module)
+        db.flush()
+        discipline = Discipline(name="Disciplina Legada", code="D-LEGADO", module_id=module.id)
+        db.add(discipline)
+        db.commit()
+        discipline_id = discipline.id
+    finally:
+        db.close()
+
+    _register(client, "prof-comum@example.com")
+    assert client.get(f"/disciplines/{discipline_id}/lesson-plan").status_code == 403
 
 
 def test_professor_cannot_download_or_delete_another_professors_attachment(client):
