@@ -1,15 +1,23 @@
 from typing import List
 import io
+import re
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from ..database import get_db
-from ..dependencies import ensure_owner_or_admin, get_current_user, require_admin_action, validate_schedule_references
+from ..dependencies import (
+    ensure_owner_or_admin, get_current_user, rate_limit_user, require_admin_action, validate_schedule_references,
+)
 from ..logging_config import get_logger
-from ..models.base import Course, Discipline, Holiday, Module, ScheduleConfig, ScheduledClass, ScheduledClassStatus, User
+from ..models.base import (
+    AcademicLevel, Course, DeliveryFormat, Discipline, Holiday, HolidayPolicy,
+    Module, RecurrenceType, ScheduleConfig, ScheduledClass, ScheduledClassStatus, User,
+)
+from ..services.schedule_importer import parse_schedule_file
 from ..schemas.base_schemas import (
     CalendarEventRead,
     FullScheduleCreate,
@@ -25,6 +33,10 @@ from ..schemas.base_schemas import (
     ScheduledClassRead,
     ScheduledClassUpdate,
     ScheduleResponse,
+    ModalityBreakdown,
+    ReportBreakdownItem,
+    ReportsRead,
+    ScheduleImportResult,
     StatsRead,
 )
 from ..services.schedule_generator import ScheduleGeneratorService
@@ -126,12 +138,74 @@ def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_
     )
 
 
+@router.get("/reports/", response_model=ReportsRead)
+def get_reports(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = (
+        db.query(ScheduledClass)
+        .join(ScheduleConfig)
+        .join(Course, ScheduleConfig.course_id == Course.id)
+        .join(Discipline, ScheduleConfig.discipline_id == Discipline.id)
+        .options(
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.course),
+            contains_eager(ScheduledClass.config).contains_eager(ScheduleConfig.discipline),
+        )
+    )
+    if user.role != "admin":
+        query = query.filter(ScheduleConfig.owner_id == user.id)
+    classes = query.all()
+
+    total_hours = 0.0
+    discipline_stats: dict[str, dict] = {}
+    institution_stats: dict[str, dict] = {}
+    modality = ModalityBreakdown()
+
+    for sc in classes:
+        cfg = sc.config
+        hours = 0.0
+        if cfg.start_time and cfg.end_time:
+            start_minutes = cfg.start_time.hour * 60 + cfg.start_time.minute
+            end_minutes = cfg.end_time.hour * 60 + cfg.end_time.minute
+            hours = max(0.0, (end_minutes - start_minutes) / 60)
+        total_hours += hours
+
+        disc_name = cfg.discipline.name
+        d = discipline_stats.setdefault(disc_name, {"classes": 0, "hours": 0.0})
+        d["classes"] += 1
+        d["hours"] += hours
+
+        institution = cfg.course.institution or "Sem instituição"
+        i = institution_stats.setdefault(institution, {"classes": 0, "hours": 0.0})
+        i["classes"] += 1
+        i["hours"] += hours
+
+        if cfg.format == DeliveryFormat.PRESENCIAL:
+            modality.presencial += 1
+        else:
+            modality.remoto += 1
+
+    def _top(stats: dict[str, dict], limit: int = 10) -> list:
+        items = [ReportBreakdownItem(label=k, classes=v["classes"], hours=round(v["hours"], 2)) for k, v in stats.items()]
+        return sorted(items, key=lambda x: x.classes, reverse=True)[:limit]
+
+    return ReportsRead(
+        total_classes=len(classes),
+        total_hours=round(total_hours, 2),
+        by_discipline=_top(discipline_stats),
+        by_institution=_top(institution_stats),
+        by_modality=modality,
+    )
+
+
 def _holiday_warnings_for(db: Session, dates: list) -> list:
     holidays = {h.date: h.description for h in db.query(Holiday).all()}
     return ScheduleGeneratorService.find_holiday_adjacency_warnings(dates, holidays)
 
 
-@router.post("/generate-schedule/", response_model=ScheduleResponse)
+@router.post(
+    "/generate-schedule/",
+    response_model=ScheduleResponse,
+    dependencies=[Depends(rate_limit_user("generate_schedule", max_events=30, window_seconds=60))],
+)
 def generate_schedule(config: ScheduleConfigBase, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         validate_schedule_references(db, config, user)
@@ -268,6 +342,141 @@ def save_schedule(
         db.rollback()
         logger.error(f"Erro ao salvar cronograma: {e}", extra={"event": "schedule_save_failed"}, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erro ao salvar cronograma: {str(e)}")
+
+
+def _generate_discipline_code(db: Session, name: str, owner_id: int | None) -> str:
+    letters = re.findall(r"[A-Za-zÀ-ÿ0-9]+", name)
+    base = "".join(w[0] for w in letters).upper()[:8] or "DISC"
+    candidate = base
+    suffix = 1
+    while db.query(Discipline).filter(Discipline.owner_id == owner_id, Discipline.code == candidate).first():
+        suffix += 1
+        candidate = f"{base}{suffix}"
+    return candidate
+
+
+def _find_or_create_course(db: Session, user: User, group) -> Course:
+    course = db.query(Course).filter(Course.owner_id == user.id, Course.name == group.course_name).first()
+    if course:
+        return course
+    course = Course(
+        name=group.course_name, owner_id=user.id,
+        institution=group.institution or None,
+        academic_level=AcademicLevel(group.academic_level),
+        academic_level_other=group.academic_level_other,
+        semester=group.semester,
+        year=group.classes[0].date.year if group.classes else 2026,
+    )
+    db.add(course)
+    db.flush()
+    return course
+
+
+def _find_or_create_module(db: Session, user: User, course: Course, name: str) -> Module:
+    module = db.query(Module).filter(Module.owner_id == user.id, Module.course_id == course.id, Module.name == name).first()
+    if module:
+        return module
+    module = Module(name=name, course_id=course.id, owner_id=user.id)
+    db.add(module)
+    db.flush()
+    return module
+
+
+def _find_or_create_discipline(db: Session, user: User, module: Module, name: str) -> Discipline:
+    discipline = (
+        db.query(Discipline)
+        .filter(Discipline.owner_id == user.id, Discipline.module_id == module.id, Discipline.name == name)
+        .first()
+    )
+    if discipline:
+        return discipline
+    discipline = Discipline(name=name, code=_generate_discipline_code(db, name, user.id), module_id=module.id, owner_id=user.id)
+    db.add(discipline)
+    db.flush()
+    return discipline
+
+
+@router.post(
+    "/schedules/import/xlsx",
+    response_model=ScheduleImportResult,
+    dependencies=[Depends(rate_limit_user("import_schedule", max_events=10, window_seconds=60))],
+)
+async def import_schedules_xlsx(file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Importa cronogramas de uma planilha (mesmo layout do /schedules/export/xlsx).
+    Cada linha é uma aula; linhas com o mesmo curso/módulo/disciplina/formato/
+    horário viram um único cronograma. Cursos, módulos e disciplinas já
+    existentes (por nome, no catálogo do próprio professor) são reaproveitados
+    em vez de duplicados."""
+    try:
+        content = await file.read()
+        parsed = parse_schedule_file(file.filename or "", content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    errors: list[dict] = list(parsed["errors"])
+    imported_configs = 0
+    imported_classes = 0
+    skipped_groups = 0
+
+    for group in parsed["groups"]:
+        if not group.classes:
+            continue
+        try:
+            course = _find_or_create_course(db, user, group)
+            module = _find_or_create_module(db, user, course, group.module_name)
+            discipline = _find_or_create_discipline(db, user, module, group.discipline_name)
+
+            dates = [c.date for c in group.classes]
+            start_time = next((c.start_time for c in group.classes if c.start_time), None)
+            end_time = next((c.end_time for c in group.classes if c.end_time), None)
+            weekdays = sorted({d.weekday() for d in dates})
+            recurrence = RecurrenceType.NA if len(group.classes) == 1 else RecurrenceType.SEMANAL
+
+            hours_per_class = 0.0
+            if start_time and end_time:
+                hours_per_class = max(0.0, ((end_time.hour * 60 + end_time.minute) - (start_time.hour * 60 + start_time.minute)) / 60)
+
+            db_config = ScheduleConfig(
+                course_id=course.id, module_id=module.id, discipline_id=discipline.id, owner_id=user.id,
+                format=DeliveryFormat(group.format), start_date=min(dates), end_date=max(dates),
+                recurrence=recurrence, days_of_week=",".join(str(w) for w in weekdays),
+                start_time=start_time, end_time=end_time, holiday_policy=HolidayPolicy.RESCHEDULE,
+                num_classes=len(group.classes), workload=round(len(group.classes) * hours_per_class),
+            )
+            db.add(db_config)
+            db.flush()
+
+            for order, cls in enumerate(group.classes, start=1):
+                db.add(ScheduledClass(config_id=db_config.id, date=cls.date, order=order))
+
+            db.commit()
+            imported_configs += 1
+            imported_classes += len(group.classes)
+        except Exception as e:
+            db.rollback()
+            skipped_groups += 1
+            errors.append({
+                "row": group.classes[0].row_number if group.classes else None,
+                "field": "grupo",
+                "message": f"{group.course_name} / {group.discipline_name}: {e}",
+            })
+
+    logger.info(
+        f"Importação de cronogramas: arquivo='{file.filename}' cronogramas={imported_configs} "
+        f"aulas={imported_classes} grupos_com_erro={skipped_groups}",
+        extra={"event": "schedules_imported", "actor_id": user.id},
+    )
+    return ScheduleImportResult(
+        message=(
+            f"Importação concluída: {imported_configs} cronograma(s) e {imported_classes} aula(s) criados"
+            + (f", {skipped_groups} grupo(s) com erro" if skipped_groups else "") + "."
+        ),
+        imported_configs=imported_configs,
+        imported_classes=imported_classes,
+        skipped_groups=skipped_groups,
+        total_rows=parsed["total_rows"],
+        errors=errors[:25],
+    )
 
 
 @router.get("/schedules/configs/", response_model=List[ScheduleConfigRead])

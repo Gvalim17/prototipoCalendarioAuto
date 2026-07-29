@@ -1,11 +1,11 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models.base import Course, Discipline, Module, User, UserSession
+from .models.base import AuthThrottleEvent, Course, Discipline, Module, User, UserSession
 from .security import hash_token
 from .schemas.base_schemas import ScheduleConfigBase
 
@@ -74,7 +74,13 @@ def get_course_or_404(db: Session, course_id: int) -> Course:
 
 
 def ensure_owner_or_admin(owner_id: int | None, user: User, resource: str = "Este cronograma") -> None:
-    if owner_id is not None and owner_id != user.id and user.role != "admin":
+    if user.role == "admin":
+        return
+    # owner_id nulo é dado legado de antes do isolamento por professor existir.
+    # Sem essa checagem, qualquer usuário autenticado que descobrisse o ID
+    # (via enumeração) poderia ler/editar/reivindicar o registro de outro
+    # professor. Só admin pode tocar nesses registros órfãos.
+    if owner_id is None or owner_id != user.id:
         raise HTTPException(status_code=403, detail=f"{resource} pertence a outro professor.")
 
 
@@ -90,6 +96,32 @@ def get_discipline_or_404(db: Session, discipline_id: int) -> Discipline:
     if not discipline:
         raise HTTPException(status_code=404, detail="Disciplina não encontrada")
     return discipline
+
+
+def rate_limit_user(kind: str, max_events: int, window_seconds: int):
+    """Fábrica de dependência para limitar rotas caras (geração/importação de
+    cronograma) por usuário autenticado. Reaproveita a tabela AuthThrottleEvent
+    já usada para throttling de login — persistida no banco, então funciona
+    com múltiplos workers/instâncias, ao contrário de um contador em memória."""
+    def _dependency(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> None:
+        key = f"user:{user.id}"
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=window_seconds)
+        db.query(AuthThrottleEvent).filter(
+            AuthThrottleEvent.key == key,
+            AuthThrottleEvent.kind == kind,
+            AuthThrottleEvent.created_at < cutoff,
+        ).delete()
+        count = db.query(AuthThrottleEvent).filter(
+            AuthThrottleEvent.key == key,
+            AuthThrottleEvent.kind == kind,
+            AuthThrottleEvent.created_at >= cutoff,
+        ).count()
+        if count >= max_events:
+            db.commit()
+            raise HTTPException(status_code=429, detail="Muitas requisições. Aguarde um momento e tente novamente.")
+        db.add(AuthThrottleEvent(key=key, kind=kind, created_at=datetime.now(timezone.utc).replace(tzinfo=None)))
+        db.commit()
+    return _dependency
 
 
 def validate_schedule_references(db: Session, config: ScheduleConfigBase, user: User) -> None:

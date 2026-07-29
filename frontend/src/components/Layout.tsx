@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
-import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon, ShieldCheck } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
+import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon, ShieldCheck, BarChart3, HelpCircle } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -10,6 +10,7 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
   const initials = user?.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'CA';
@@ -19,7 +20,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Sidebar */}
       <aside className="w-64 bg-surface border-r border-line flex-col hidden md:flex">
         <div className="p-6">
-          <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+          <Link to="/" data-tour="nav-brand" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
             <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center">
               <Calendar className="text-accent-fg" size={22} />
             </div>
@@ -34,12 +35,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
         <nav className="flex-1 px-3 space-y-1 mt-2">
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Painel" active={location.pathname === '/'} />
-          <NavItem to="/courses" icon={<GraduationCap size={18} />} label="Cursos" active={location.pathname.startsWith('/courses') || location.pathname.startsWith('/mbas')} />
-          <NavItem to="/generate" icon={<Calendar size={18} />} label="Gerar Cronogramas" active={location.pathname.startsWith('/generate')} />
-          <NavItem to="/schedules" icon={<CalendarDays size={18} />} label="Cronogramas" active={location.pathname === '/schedules'} />
-          <NavItem to="/holidays" icon={<CalendarClock size={18} />} label="Feriados e Recessos" active={location.pathname === '/holidays'} />
-          <NavItem to="/alerts" icon={<Bell size={18} />} label="Alertas" active={location.pathname === '/alerts'} />
-          <NavItem to="/privacidade" icon={<ShieldCheck size={18} />} label="Privacidade" active={location.pathname === '/privacidade'} />
+          <NavItem to="/courses" tourId="nav-courses" icon={<GraduationCap size={18} />} label="Cursos" active={location.pathname.startsWith('/courses') || location.pathname.startsWith('/mbas')} />
+          <NavItem to="/generate" tourId="nav-generate" icon={<Calendar size={18} />} label="Gerar Cronogramas" active={location.pathname.startsWith('/generate')} />
+          <NavItem to="/schedules" tourId="nav-schedules" icon={<CalendarDays size={18} />} label="Cronogramas" active={location.pathname === '/schedules'} />
+          <NavItem to="/holidays" tourId="nav-holidays" icon={<CalendarClock size={18} />} label="Feriados e Recessos" active={location.pathname === '/holidays'} />
+          <NavItem to="/alerts" tourId="nav-alerts" icon={<Bell size={18} />} label="Alertas" active={location.pathname === '/alerts'} />
+          <NavItem to="/relatorios" tourId="nav-reports" icon={<BarChart3 size={18} />} label="Relatórios" active={location.pathname === '/relatorios'} />
+          <NavItem to="/privacidade" tourId="nav-privacy" icon={<ShieldCheck size={18} />} label="Privacidade" active={location.pathname === '/privacidade'} />
           {user?.role === 'admin' && (
             <NavItem to="/logs" icon={<ScrollText size={18} />} label="Logs do Sistema" active={location.pathname === '/logs'} />
           )}
@@ -69,6 +71,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('/ajuda')}
+              data-tour="header-help"
+              aria-label="Ajuda"
+              title="Ajuda"
+              className="w-9 h-9 rounded-lg border border-line bg-surface-2 flex items-center justify-center text-muted hover:text-ink transition-colors"
+            >
+              <HelpCircle size={17} />
+            </button>
             <button
               onClick={toggle}
               aria-label={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
@@ -102,11 +113,13 @@ interface NavItemProps {
   icon: ReactNode;
   label: string;
   active?: boolean;
+  tourId?: string;
 }
 
-const NavItem = ({ to, icon, label, active = false }: NavItemProps) => (
+const NavItem = ({ to, icon, label, active = false, tourId }: NavItemProps) => (
   <Link
     to={to}
+    data-tour={tourId}
     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
       active
         ? 'bg-accent/10 text-accent border border-accent/20'

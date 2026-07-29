@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Pencil, Trash2, Clock, RefreshCw, NotebookPen, Filter, Building2 } from 'lucide-react';
+import { CalendarDays, Pencil, Trash2, Clock, RefreshCw, NotebookPen, Filter, Building2, Upload } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
-import { ACADEMIC_LEVELS, levelLabel, WEEKDAYS, type ScheduleConfigRead } from '../types/domain';
+import { ACADEMIC_LEVELS, levelLabel, WEEKDAYS, type ScheduleConfigRead, type ScheduleImportResult } from '../types/domain';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
+import { formatHours } from '../utils/format';
 
 const RECURRENCE_LABEL: Record<string, string> = {
   semanal: 'Semanal',
@@ -20,16 +21,6 @@ const POLICY_LABEL: Record<string, string> = {
 };
 
 const formatDate = (d?: string | null) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
-
-// Formata horas decimais (ex: 1.6666h) como "1h40" em vez do número cru.
-const formatHours = (hours?: number | null) => {
-  const totalMinutes = Math.round((hours ?? 0) * 60);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  if (h === 0) return `${m}min`;
-  if (m === 0) return `${h}h`;
-  return `${h}h${String(m).padStart(2, '0')}`;
-};
 
 const formatWeekdays = (days?: number[]) => {
   if (!days?.length) return 'Dia único';
@@ -53,8 +44,10 @@ const ScheduleList = () => {
   const [courseFilter, setCourseFilter] = useState(ALL);
   const [levelFilter, setLevelFilter] = useState(ALL);
   const [professorFilter, setProfessorFilter] = useState(ALL);
+  const [importing, setImporting] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     fetchConfigs();
@@ -68,6 +61,30 @@ const ScheduleList = () => {
       console.error('Erro ao buscar cronogramas:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const importFile = async (file: File) => {
+    setImporting(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await api.post<ScheduleImportResult>('/schedules/import/xlsx', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (res.data.errors.length > 0) {
+        toast.info(`${res.data.message} ${res.data.errors.length} linha(s)/grupo(s) com erro (veja o console).`);
+        console.warn('Erros na importação de cronograma:', res.data.errors);
+      } else {
+        toast.success(res.data.message);
+      }
+      fetchConfigs();
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      toast.error(detail || 'Erro ao importar cronograma.');
+    } finally {
+      setImporting(false);
+      if (importInputRef.current) importInputRef.current.value = '';
     }
   };
 
@@ -119,9 +136,18 @@ const ScheduleList = () => {
           <h2 className="text-2xl font-semibold text-ink tracking-tight">Cronogramas</h2>
           <p className="text-muted mt-1 text-sm">Cronogramas gerados por disciplina. Edite para regenerar com novas datas.</p>
         </div>
-        <Link to="/generate" className="btn-primary">
-          <CalendarDays size={18} /> Novo cronograma
-        </Link>
+        <div className="flex items-center gap-2">
+          <input
+            ref={importInputRef} type="file" accept=".csv,.xls,.xlsx" className="hidden"
+            onChange={(e) => { const file = e.target.files?.[0]; if (file) void importFile(file); }}
+          />
+          <button onClick={() => importInputRef.current?.click()} disabled={importing} className="btn-ghost" title="Importar cronograma de uma planilha (.csv/.xls/.xlsx)">
+            <Upload size={18} /> {importing ? 'Importando...' : 'Importar'}
+          </button>
+          <Link to="/generate" className="btn-primary">
+            <CalendarDays size={18} /> Novo cronograma
+          </Link>
+        </div>
       </div>
 
       {configs.length > 0 && (

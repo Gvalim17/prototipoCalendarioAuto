@@ -79,6 +79,29 @@ export interface Stats {
   scheduled_classes: number;
 }
 
+export interface ReportBreakdownItem {
+  label: string;
+  classes: number;
+  hours: number;
+}
+
+export interface Reports {
+  total_classes: number;
+  total_hours: number;
+  by_discipline: ReportBreakdownItem[];
+  by_institution: ReportBreakdownItem[];
+  by_modality: { presencial: number; remoto: number };
+}
+
+export interface ScheduleImportResult {
+  message: string;
+  imported_configs: number;
+  imported_classes: number;
+  skipped_groups: number;
+  total_rows: number;
+  errors: { row?: number | null; field: string; message: string }[];
+}
+
 export type HolidayPolicy = 'reschedule' | 'manual' | 'skip';
 export type Recurrence = 'semanal' | 'quinzenal' | 'na';
 

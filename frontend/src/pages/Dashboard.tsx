@@ -80,12 +80,12 @@ const Dashboard = () => {
             ))}
           </div>
           <button onClick={exportXlsx} className="btn-ghost"><Download size={16} /> Exportar</button>
-          <Link to="/generate" className="btn-primary"><CalendarCheck size={16} /> Novo cronograma</Link>
+          <Link to="/generate" data-tour="dashboard-new-schedule" className="btn-primary"><CalendarCheck size={16} /> Novo cronograma</Link>
         </div>
       </div>
 
       {/* Contadores */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div data-tour="dashboard-stats" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={<CalendarCheck size={20} />} label="Aulas agendadas" value={stats.scheduled_classes} highlight />
         <StatCard icon={<GraduationCap size={20} />} label="Cursos" value={stats.courses} to="/courses" />
         <StatCard icon={<Layers size={20} />} label="Módulos" value={stats.modules} to="/courses" />

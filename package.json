@@ -1,7 +1,7 @@
 {
-  "name": "prototipo-calendario-auto",
+  "name": "cronedu",
   "version": "1.0.0",
-  "description": "Orquestrador de Calendário Automático",
+  "description": "CronEdu — geração e gestão de cronogramas acadêmicos",
   "main": "index.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:back\" \"npm run dev:front\"",
@@ -9,7 +9,8 @@
     "dev:front": "cd frontend && npm run dev",
     "install:all": "npm install && cd frontend && npm install && cd ../backend && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt",
     "migrate:back": "cd backend && .venv/bin/alembic upgrade head",
-    "setup:back": "cd backend && .venv/bin/python -m pip install -r requirements.txt"
+    "setup:back": "cd backend && .venv/bin/python -m pip install -r requirements.txt",
+    "seed:back": "cd backend && .venv/bin/python -m app.utils.seed_data"
   },
   "dependencies": {
     "concurrently": "^8.2.2"
