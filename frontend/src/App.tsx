@@ -14,6 +14,8 @@ import Login from './pages/Login';
 import Alerts from './pages/Alerts';
 import Users from './pages/Users';
 import LessonPlanner from './pages/LessonPlanner';
+import WeeklyView from './pages/WeeklyView';
+import PublicLessonMaterials from './pages/PublicLessonMaterials';
 import Terms from './pages/Terms';
 import Privacy from './pages/Privacy';
 import Reports from './pages/Reports';
@@ -29,6 +31,9 @@ function AuthenticatedApp() {
   // conta (ex.: link compartilhado, consulta antes do cadastro).
   const isTermsLink = window.location.pathname === '/termos';
   if (isTermsLink) return <Terms />;
+  // Link público de materiais de aula: alunos acessam sem login, via token opaco.
+  const materialLinkMatch = window.location.pathname.match(/^\/material\/([^/]+)$/);
+  if (materialLinkMatch) return <PublicLessonMaterials token={materialLinkMatch[1]} />;
 
   if (loading) {
     return <main className="min-h-screen bg-bg text-muted grid place-items-center text-sm">Carregando...</main>;
@@ -41,6 +46,7 @@ function AuthenticatedApp() {
         <Layout>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/minha-semana" element={<WeeklyView />} />
             <Route path="/courses/*" element={<CourseList />} />
             <Route path="/mbas/*" element={<Navigate to="/courses" replace />} />
             <Route path="/holidays" element={<HolidayRecessList />} />

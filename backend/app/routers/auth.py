@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..dependencies import get_current_user, require_csrf
 from ..logging_config import get_logger
-from ..models.base import AuthThrottleEvent, PasswordResetToken, User, UserSession
+from ..models.base import AuthThrottleEvent, Course, PasswordResetToken, ScheduleConfig, User, UserSession
 from ..schemas.auth_schemas import (
     AuthSessionRead, CsrfTokenRead, CurrentUserRead, LoginRequest, PasswordResetConfirm,
     PasswordResetRequest, PrivacyExportRead, RegisterRequest,
@@ -482,12 +482,40 @@ def export_my_data(user: User = Depends(get_current_user)):
     )
 
 
+def _purge_owned_academic_data(db: Session, user: User) -> None:
+    """Apaga por completo o catálogo acadêmico do titular (cronogramas, aulas,
+    roteiros e anexos) antes de remover a conta.
+
+    Sem isso, o FK de Course/Module/Discipline/ScheduleConfig usa
+    ondelete="SET NULL": excluir só o usuário zerava o owner_id e deixava todo
+    o conteúdo (inclusive roteiros de aula e arquivos anexados) órfão no banco
+    indefinidamente, visível só a um admin — o direito à eliminação (LGPD
+    art. 18, IX) ficava apenas parcialmente atendido.
+    """
+    # ScheduleConfig precisa ir primeiro: Course/Module/Discipline têm FK
+    # RESTRICT vindo de ScheduleConfig (sem ondelete), então excluir o curso
+    # antes dos cronogramas que o referenciam quebraria com IntegrityError.
+    # O cascade "all, delete-orphan" da relação ScheduleConfig.classes cuida
+    # de ScheduledClass; o ondelete=CASCADE do banco cuida de
+    # LessonScript -> LessonAttachment/LessonShareLink a partir daí.
+    for config in db.query(ScheduleConfig).filter(ScheduleConfig.owner_id == user.id).all():
+        db.delete(config)
+    db.flush()
+
+    # Course cascade (ORM) -> Module -> Discipline; o ondelete=CASCADE do
+    # banco cuida do LessonPlan de cada disciplina removida.
+    for course in db.query(Course).filter(Course.owner_id == user.id).all():
+        db.delete(course)
+    db.flush()
+
+
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
 def delete_my_account(
     request: Request, response: Response, user: User = Depends(get_current_user),
     _: None = Depends(require_csrf), db: Session = Depends(get_db),
 ):
     actor_id = user.id
+    _purge_owned_academic_data(db, user)
     db.delete(user)
     db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")

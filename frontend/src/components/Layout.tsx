@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon, ShieldCheck, BarChart3, HelpCircle } from 'lucide-react';
+import { LayoutDashboard, Calendar, GraduationCap, CalendarClock, CalendarDays, CalendarRange, ScrollText, Menu, Sun, Moon, LogOut, Bell, Users as UsersIcon, ShieldCheck, BarChart3, HelpCircle } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,6 +35,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
         <nav className="flex-1 px-3 space-y-1 mt-2">
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Painel" active={location.pathname === '/'} />
+          <NavItem to="/minha-semana" tourId="nav-week" icon={<CalendarRange size={18} />} label="Minha Semana" active={location.pathname === '/minha-semana'} />
           <NavItem to="/courses" tourId="nav-courses" icon={<GraduationCap size={18} />} label="Cursos" active={location.pathname.startsWith('/courses') || location.pathname.startsWith('/mbas')} />
           <NavItem to="/generate" tourId="nav-generate" icon={<Calendar size={18} />} label="Gerar Cronogramas" active={location.pathname.startsWith('/generate')} />
           <NavItem to="/schedules" tourId="nav-schedules" icon={<CalendarDays size={18} />} label="Cronogramas" active={location.pathname === '/schedules'} />

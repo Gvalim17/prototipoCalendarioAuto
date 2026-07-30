@@ -1,7 +1,7 @@
 import os
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from .models.base import Base
@@ -41,6 +41,18 @@ POOL_KWARGS = {} if DATABASE_URL.startswith("sqlite") else {
 
 engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS, **POOL_KWARGS)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+if DATABASE_URL.startswith("sqlite"):
+    # SQLite ignora ON DELETE CASCADE/SET NULL por padrão — precisa habilitar
+    # a checagem de foreign keys por conexão. Sem isso, o comportamento em
+    # dev/testes (SQLite) diverge silenciosamente do Postgres de produção,
+    # onde os cascades já são aplicados pelo servidor.
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 def should_auto_create_tables() -> bool:

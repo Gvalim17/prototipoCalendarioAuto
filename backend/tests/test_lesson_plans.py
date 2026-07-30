@@ -9,7 +9,7 @@ from app.database import SessionLocal
 from app.main import app
 from app.models.base import (
     AcademicLevel, Course, DeliveryFormat, Discipline, HolidayPolicy,
-    Module, RecurrenceType, ScheduleConfig, ScheduledClass, User,
+    LessonAttachment, Module, RecurrenceType, ScheduleConfig, ScheduledClass, User,
 )
 
 
@@ -142,6 +142,24 @@ def test_lesson_plan_export_docx_and_pdf(client):
     assert pdf_response.content.startswith(b"%PDF")
 
 
+def test_lesson_plan_export_pdf_escapes_reportlab_markup_in_user_text(client):
+    """`Paragraph` do reportlab interpreta uma mini-sintaxe tipo XML. Sem
+    escapar o texto do professor, algo como '<font color="x">' derruba a
+    geração do PDF com uma exceção (500) — inclusive quando é o admin quem
+    exporta o plano de outro professor."""
+    _register(client)
+    discipline_id, _ = _seed_lesson()
+    payload = {
+        "ementa": '<font color="naoexiste123">conteúdo malicioso</font>',
+        "notes": "<b><i>" * 50 + "texto",
+    }
+    client.put(f"/disciplines/{discipline_id}/lesson-plan", json=payload, headers=_csrf_headers(client))
+
+    pdf_response = client.get(f"/disciplines/{discipline_id}/lesson-plan/export.pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.content.startswith(b"%PDF")
+
+
 def test_lesson_plan_requires_existing_discipline(client):
     _register(client)
     response = client.get("/disciplines/999999/lesson-plan")
@@ -197,6 +215,17 @@ def test_upload_download_and_delete_attachment(client):
     download = client.get(f"/lesson-attachments/{attachment_id}/download")
     assert download.status_code == 200
     assert download.content == b"conteudo do slide"
+
+    # LGPD: os bytes gravados no banco não podem ser o conteúdo em texto puro
+    # — devem estar cifrados em nível de aplicação, não só protegidos pela
+    # criptografia de disco do provedor.
+    db = SessionLocal()
+    try:
+        stored = db.query(LessonAttachment).filter(LessonAttachment.id == attachment_id).first()
+        assert stored.data != b"conteudo do slide"
+        assert b"conteudo do slide" not in stored.data
+    finally:
+        db.close()
 
     delete = client.delete(f"/lesson-attachments/{attachment_id}", headers=_csrf_headers(client))
     assert delete.status_code == 204

@@ -31,7 +31,18 @@ def send_class_alert_email(recipient: str, title: str, body: str) -> None:
     _send_email(recipient, title, body)
 
 
-def _send_email(recipient: str, subject: str, body: str) -> None:
+def send_lesson_material_email(
+    recipient: str, subject: str, body: str, attachments: list[tuple[str, str, bytes]]
+) -> None:
+    """Envia o roteiro/materiais de uma aula. `attachments` é uma lista de
+    (filename, content_type, data). Um e-mail por destinatário — evita expor
+    os endereços de outros alunos entre si (BCC implícito por design)."""
+    _send_email(recipient, subject, body, attachments=attachments)
+
+
+def _send_email(
+    recipient: str, subject: str, body: str, attachments: list[tuple[str, str, bytes]] | None = None
+) -> None:
     host = os.getenv("SMTP_HOST", "").strip()
     sender = os.getenv("SMTP_FROM", "").strip()
     username = os.getenv("SMTP_USERNAME", "").strip()
@@ -47,6 +58,9 @@ def _send_email(recipient: str, subject: str, body: str) -> None:
     message["From"] = sender
     message["To"] = recipient
     message.set_content(body)
+    for filename, content_type, data in attachments or []:
+        maintype, _, subtype = (content_type or "application/octet-stream").partition("/")
+        message.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
 
     try:
         context = ssl.create_default_context()
@@ -65,4 +79,4 @@ def _send_email(recipient: str, subject: str, body: str) -> None:
                     client.login(username, password)
                 client.send_message(message)
     except (OSError, smtplib.SMTPException) as exc:
-        raise EmailDeliveryError("Não foi possível enviar o e-mail de recuperação.") from exc
+        raise EmailDeliveryError("Não foi possível enviar o e-mail.") from exc

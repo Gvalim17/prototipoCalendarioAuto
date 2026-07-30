@@ -292,3 +292,19 @@ class LessonAttachment(Base):
     uploaded_at = Column(DateTime, nullable=False)
 
     lesson_script = relationship("LessonScript", back_populates="attachments")
+
+
+class LessonShareLink(Base):
+    """Link público (token opaco) para o professor compartilhar os anexos de
+    uma aula específica com os alunos, sem exigir login. Expira em 7 dias e
+    pode ser revogado a qualquer momento — só o hash do token fica no banco."""
+    __tablename__ = "lesson_share_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lesson_script_id = Column(Integer, ForeignKey("lesson_scripts.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+
+    lesson_script = relationship("LessonScript")

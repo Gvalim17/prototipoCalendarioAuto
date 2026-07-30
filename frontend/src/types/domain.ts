@@ -58,6 +58,7 @@ export interface Recess {
 
 export interface CalendarEvent {
   id: number;
+  config_id: number;
   date: string;
   order: number;
   discipline_id: number;
@@ -70,6 +71,8 @@ export interface CalendarEvent {
   start_time?: string | null;
   end_time?: string | null;
   color?: string;
+  status: 'scheduled' | 'cancelled';
+  change_reason?: string | null;
 }
 
 export interface Stats {
@@ -237,4 +240,27 @@ export interface ScheduledClassSummary {
   order: number;
   status: 'scheduled' | 'cancelled';
   change_reason?: string | null;
+}
+
+export interface ShareLinkStatus {
+  active: boolean;
+  url?: string | null;
+  expires_at?: string | null;
+}
+
+export interface ShareLinkCreated extends ShareLinkStatus {
+  token: string;
+}
+
+export interface SendLessonEmailResult {
+  sent: number;
+  failed: string[];
+}
+
+export interface PublicLessonMaterials {
+  discipline_name: string;
+  course_name: string;
+  date: string;
+  topic?: string | null;
+  attachments: { id: number; filename: string; size_bytes: number }[];
 }

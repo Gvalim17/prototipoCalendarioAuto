@@ -5,6 +5,7 @@ import re
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
@@ -121,21 +122,27 @@ def _config_to_read(db_config: ScheduleConfig) -> dict:
 
 @router.get("/stats/", response_model=StatsRead)
 def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    courses_q = db.query(Course)
-    modules_q = db.query(Module)
-    disciplines_q = db.query(Discipline)
-    classes_q = db.query(ScheduledClass).join(ScheduleConfig)
+    # 4 contagens independentes combinadas em subqueries escalares de uma só
+    # SELECT — antes eram 4 round-trips sequenciais ao banco (4x .count()),
+    # cada um pagando a latência de rede inteira sozinho.
+    courses_query = select(func.count(Course.id))
+    modules_query = select(func.count(Module.id))
+    disciplines_query = select(func.count(Discipline.id))
+    classes_query = select(func.count(ScheduledClass.id)).select_from(ScheduledClass).join(ScheduleConfig)
     if user.role != "admin":
-        courses_q = courses_q.filter(Course.owner_id == user.id)
-        modules_q = modules_q.filter(Module.owner_id == user.id)
-        disciplines_q = disciplines_q.filter(Discipline.owner_id == user.id)
-        classes_q = classes_q.filter(ScheduleConfig.owner_id == user.id)
-    return StatsRead(
-        courses=courses_q.count(),
-        modules=modules_q.count(),
-        disciplines=disciplines_q.count(),
-        scheduled_classes=classes_q.count(),
-    )
+        courses_query = courses_query.where(Course.owner_id == user.id)
+        modules_query = modules_query.where(Module.owner_id == user.id)
+        disciplines_query = disciplines_query.where(Discipline.owner_id == user.id)
+        classes_query = classes_query.where(ScheduleConfig.owner_id == user.id)
+    courses_sq = courses_query.scalar_subquery()
+    modules_sq = modules_query.scalar_subquery()
+    disciplines_sq = disciplines_query.scalar_subquery()
+    classes_sq = classes_query.scalar_subquery()
+
+    courses, modules, disciplines, scheduled_classes = db.execute(
+        select(courses_sq, modules_sq, disciplines_sq, classes_sq)
+    ).one()
+    return StatsRead(courses=courses, modules=modules, disciplines=disciplines, scheduled_classes=scheduled_classes)
 
 
 @router.get("/reports/", response_model=ReportsRead)
@@ -750,6 +757,7 @@ def list_all_scheduled_classes(user: User = Depends(get_current_user), db: Sessi
     return [
         {
             "id": sc.id,
+            "config_id": sc.config_id,
             "date": sc.date,
             "order": sc.order,
             "discipline_id": sc.config.discipline_id,
@@ -762,6 +770,8 @@ def list_all_scheduled_classes(user: User = Depends(get_current_user), db: Sessi
             "start_time": sc.config.start_time,
             "end_time": sc.config.end_time,
             "color": _discipline_color(sc.config.discipline_id),
+            "status": sc.status.value,
+            "change_reason": sc.change_reason,
         }
         for sc in results
     ]

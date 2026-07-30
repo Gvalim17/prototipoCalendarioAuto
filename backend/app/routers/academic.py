@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..dependencies import ensure_owner_or_admin, get_course_or_404, get_current_user, get_discipline_or_404, get_module_or_404
@@ -56,7 +56,7 @@ def list_courses(
     semester: Optional[int] = Query(None),
 ):
     query = db.query(Course).options(
-        joinedload(Course.modules).joinedload(Module.disciplines)
+        selectinload(Course.modules).selectinload(Module.disciplines)
     )
     if user.role != "admin":
         query = query.filter(Course.owner_id == user.id)
@@ -76,7 +76,7 @@ def list_courses(
 def get_course(course_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db_course = (
         db.query(Course)
-        .options(joinedload(Course.modules).joinedload(Module.disciplines))
+        .options(selectinload(Course.modules).selectinload(Module.disciplines))
         .filter(Course.id == course_id)
         .first()
     )
