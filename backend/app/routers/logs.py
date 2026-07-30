@@ -11,13 +11,28 @@ from ..schemas.base_schemas import LogEntry
 router = APIRouter()
 
 
+_TAIL_CHUNK_SIZE = 64 * 1024
+
+
 def _read_last_lines(path, limit: int) -> List[str]:
-    """Lê as últimas `limit` linhas do arquivo de log ativo. O arquivo gira em
-    5MB (ver logging_config.py), então ler o conteúdo inteiro é barato."""
+    """Lê as últimas `limit` linhas do arquivo de log ativo, de trás para
+    frente em blocos — sem isso, toda chamada lia o arquivo inteiro (até 5MB)
+    do início ao fim, mesmo para pedir só as últimas 200 linhas."""
     if not path.exists():
         return []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = [ln for ln in (line.strip() for line in f) if ln]
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        data = b""
+        newline_count = 0
+        while pos > 0 and newline_count <= limit:
+            read_size = min(_TAIL_CHUNK_SIZE, pos)
+            pos -= read_size
+            f.seek(pos)
+            data = f.read(read_size) + data
+            newline_count = data.count(b"\n")
+    text = data.decode("utf-8", errors="replace")
+    lines = [ln for ln in (line.strip() for line in text.splitlines()) if ln]
     return lines[-limit:]
 
 

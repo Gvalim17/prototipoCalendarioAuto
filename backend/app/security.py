@@ -15,8 +15,9 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 
 _SENSITIVE_VALUE = re.compile(
-    r'(?i)(password|senha|token|secret|authorization|cookie|api[_-]?key|database_url)'
-    r'(\s*[=:]\s*|"\s*:\s*")([^\s,;"}]+|"[^"]*")'
+    r"(?i)(password|senha|token|secret|authorization|cookie|api[_-]?key|database_url)\w*"
+    r"(\s*[=:]\s*|\"\s*:\s*\"|'\s*:\s*')"
+    r"([^\s,;\"']+|\"[^\"]*\"|'[^']*')"
 )
 _DATABASE_URL = re.compile(r'(?i)(postgres(?:ql)?://[^:\s/]+:)[^@\s]+(@)')
 _EPHEMERAL_FINGERPRINT_SALT = os.urandom(32)

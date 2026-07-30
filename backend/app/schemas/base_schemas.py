@@ -232,6 +232,7 @@ class ScheduledClassRead(BaseModel):
 
 class CalendarEventRead(BaseModel):
     id: int
+    config_id: int
     date: date
     order: int
     discipline_id: int
@@ -244,6 +245,8 @@ class CalendarEventRead(BaseModel):
     start_time: Optional[time] = None
     end_time: Optional[time] = None
     color: Optional[str] = None
+    status: ScheduledClassStatus
+    change_reason: Optional[str] = None
 
     class Config:
         from_attributes=True

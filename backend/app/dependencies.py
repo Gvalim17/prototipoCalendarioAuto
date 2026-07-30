@@ -26,8 +26,13 @@ def get_current_user(
             db.delete(session)
             db.commit()
         raise HTTPException(status_code=401, detail="Sua sessão expirou. Entre novamente.")
-    session.last_seen_at = now
-    db.commit()
+    # Grava last_seen_at só quando estiver defasado por mais de 5 minutos —
+    # evita um UPDATE+COMMIT (round-trip extra ao banco) em toda requisição
+    # autenticada. A expiração da sessão usa expires_at, não last_seen_at,
+    # então essa folga não afeta a validação de segurança da sessão.
+    if now - session.last_seen_at >= timedelta(minutes=5):
+        session.last_seen_at = now
+        db.commit()
     request.state.user_id = session.user_id
     request.state.session = session
     return session.user

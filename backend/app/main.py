@@ -84,6 +84,8 @@ def read_root():
 
 app.include_router(auth.router)
 app.include_router(alerts.system_router)
+# Sem sessão: valida pelo token opaco do link de compartilhamento (alunos sem login).
+app.include_router(lesson_plans.public_lesson_materials_router)
 # Sem sessão: valida por token próprio na URL (Google Agenda/Outlook buscam sozinhos).
 app.include_router(alerts.public_calendar_router)
 protected_dependencies = [Depends(get_current_user), Depends(require_csrf)]
