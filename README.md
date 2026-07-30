@@ -47,8 +47,15 @@ Feito para coordenadores e professores que organizam a agenda de cursos, MBAs, p
 
 **Planejamento de aulas**
 - Plano de Trabalho Docente (PTD) por disciplina: ementa, objetivos, conteúdo programático, metodologia, avaliação, bibliografia.
-- Roteiro por aula (tema do dia, atividades) com anexos de materiais.
-- Exportação do PTD em `.docx` e `.pdf`.
+- Roteiro por aula (tema do dia, atividades) com anexos de materiais (cifrados em repouso — veja [Segurança e privacidade](#segurança-e-privacidade-lgpd)).
+- Exportação do PTD e do roteiro de cada aula em `.docx` e `.pdf`.
+- Envio do roteiro e dos anexos de uma aula por e-mail direto para os alunos.
+- Link público de compartilhamento dos anexos de uma aula (sem exigir login), com expiração automática em 7 dias e revogação a qualquer momento.
+
+**Minha Semana**
+- Visão semanal (dia a dia, com navegação entre semanas) de todas as aulas do professor, agrupadas por disciplina e curso.
+- Mini calendário no topo mostrando os horários ocupados de cada dia da semana, com clique para abrir direto o roteiro/materiais daquela aula.
+- Mesmo fluxo de planejamento (roteiro, anexos, exportação, e-mail, link público, remarcação/cancelamento) disponível direto na visão semanal, sem precisar entrar em cada disciplina.
 
 **Feriados e recessos**
 - Cadastro manual ou importação de planilha com um ano inteiro de feriados de uma vez.
@@ -184,6 +191,7 @@ Todas as variáveis estão documentadas com comentários em [`backend/.env.examp
 - `ALLOWED_ORIGINS` — origens permitidas por CORS.
 - `SESSION_DAYS`, `COOKIE_SECURE`, `COOKIE_SAMESITE` — configuração de sessão (os padrões servem para `http://localhost`).
 - `LOG_PII_SALT` — chave usada para pseudonimizar IPs nos logs.
+- `ATTACHMENT_ENCRYPTION_KEY` — chave usada para cifrar os anexos de aula em repouso. Funciona sem ela (usa uma chave gerada em memória), mas **em produção é obrigatório definir um valor fixo** — sem isso, cada reinício do servidor torna os anexos já enviados indecifráveis. Comando para gerar uma chave no próprio `.env.example`.
 
 **Backend — opcionais (o sistema funciona sem, com aquela integração específica desligada):**
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` — login com Google.
@@ -312,7 +320,9 @@ A configuração já está pronta em [`render.yaml`](render.yaml) (backend) e [`
 - Senhas com hash (nunca texto puro); sessões e tokens CSRF armazenados no banco (funciona corretamente com múltiplos processos/instâncias).
 - Limite de tentativas em login, cadastro e recuperação de senha.
 - Isolamento de dados por professor em todo o sistema (cursos, disciplinas, cronogramas, planos de aula) — administradores têm visão completa.
-- Exportação e exclusão de dados pessoais disponíveis para qualquer usuário, a qualquer momento, na tela de Privacidade.
+- Exportação e exclusão de dados pessoais disponíveis para qualquer usuário, a qualquer momento, na tela de Privacidade — excluir a conta apaga também, em cascata, todo o catálogo do titular (cursos, cronogramas, roteiros de aula e anexos), não só o registro de usuário.
+- Anexos de aula cifrados em repouso em nível de aplicação (Fernet/AES, além da criptografia de disco do provedor) — veja `ATTACHMENT_ENCRYPTION_KEY` acima.
+- Link público de compartilhamento de materiais (sem login) expira automaticamente em 7 dias e pode ser revogado a qualquer momento pelo professor.
 - Cabeçalhos de segurança HTTP (`X-Frame-Options`, `Content-Security-Policy`, `HSTS`, etc.) em toda resposta da API.
 
 > **Nota de arquitetura:** o isolamento de dados é **por professor**, não por instituição. Uma mesma instalação (um deploy) é pensada para **uma instituição/equipe só** — o papel de administrador enxerga todos os professores *daquela instalação*. Se você quiser atender várias instituições sem que uma veja a outra, rode uma instalação (backend + banco) separada por instituição, em vez de uma instância pública compartilhada.
